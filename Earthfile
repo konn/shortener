@@ -86,5 +86,5 @@ worker:
   COPY shortener-worker/data/worker-template/ ./dist/
   COPY (+patch-jsffi-for-cf/dist --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm) ./dist/src
   RUN cd ./dist && npm i
-  COPY +frontend/dist/* ./dist/assets/
+  COPY +frontend/dist/* ./dist/assets/admin
   SAVE ARTIFACT ./dist AS LOCAL _build/worker
