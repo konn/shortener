@@ -1,0 +1,88 @@
+name: Build
+on:
+  push: {branches: [main], tags: v*}
+  pull_request:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-22.04
+    env:
+      ghc: 9.10.1
+    steps:
+    - uses: actions/checkout@v3
+    - name: Calculate hash keys
+      uses: actions/github-script@v6
+      id: cache-keys
+      with:
+        script: |
+          const script = require('./ci-scripts/calc-cache-keys.js')
+          await script({ os: "ubuntu", plan: "ghc-${{env.ghc}}", path: "cabal.project", core, glob })
+    - name: Setup haskell
+      uses: haskell-actions/setup@v2
+      with:
+        ghc-version: 9.10.1
+        cabal-version: 3.10.3.0
+    - name: Restore ~/.cabal/store Cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cabal/store
+        key: ${{ steps.cache-keys.outputs.store }}
+        restore-keys: ${{ steps.cache-keys.outputs.store-restore }}
+    - name: Restore dist-newstyle Cache
+      uses: actions/cache/restore@v4
+      with:
+        path: dist-newstyle
+        key: ${{ steps.cache-keys.outputs.dist }}
+        restore-keys: ${{ steps.cache-keys.outputs.dist-restore }}
+    - name: Cabal update
+      run: cabal update
+    - name: Build dependencies
+      run: cabal build discord-uploader --only-dependencies
+    - name: Save ~/.cabal/store cache
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cabal/store
+        key: ${{ steps.cache-keys.outputs.store }}
+    - name: Build
+      run: cabal build discord-uploader
+    - name: Save dist-newstyle cache
+      uses: actions/cache/save@v4
+      with:
+        path: dist-newstyle
+        key: ${{ steps.cache-keys.outputs.dist }}
+    - name: Detect binary
+      id: detect
+      run: |
+        cp "$(cabal list-bin -v0 discord-uploader)" ./discord-uploader
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        path: discord-uploader
+
+  release:
+    name: Release
+    needs: [build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Download Artifact(s)
+      id: download
+      uses: actions/download-artifact@v4
+      with:
+        path: ${{ github.workspace }}/artifacts
+    - name: Make Release on GitHub
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euxo pipefail
+        pushd "${{steps.download.outputs.download-path}}/artifact"
+        chmod +x discord-uploader
+        TARBALL=discord-uploader-${{github.ref_name}}-x86_64-linux.tar.gz
+        tar czvf "${TARBALL}" discord-uploader
+        sha256sum "${TARBALL}" >SHA256SUMS
+        gh release create --draft -F ${{github.workspace}}/discord-uploader/CHANGELOG.md -t "${{github.ref_name}}" "${{github.ref_name}}" "${TARBALL}" SHA256SUMS

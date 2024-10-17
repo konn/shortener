@@ -1,0 +1,95 @@
+cabal-version: 3.4
+name: shortener-worker
+version: 0.1.0.0
+description: Please see the README on GitHub at <https://github.com/konn/ghc-wasm-earthly/shortener-worker#readme>
+homepage: https://github.com/konn/ghc-wasm-earthly#readme
+bug-reports: https://github.com/konn/ghc-wasm-earthly/issues
+author: Hiromi ISHII
+maintainer: konn.jinro_at_gmail.com
+copyright: (c) Hiromi ISHII 2024- present
+license: BSD-3-Clause
+license-file: LICENSE
+build-type: Simple
+tested-with:
+  ghc ==9.10.1 || ==9.10.0.20240412
+
+extra-doc-files:
+  CHANGELOG.md
+  README.md
+
+source-repository head
+  type: git
+  location: https://github.com/konn/shortener
+  subdir: shortener-worker
+
+common defaults
+  autogen-modules: Paths_shortener_worker
+  other-modules: Paths_shortener_worker
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Widentities
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-export-lists
+    -Wmissing-home-modules
+    -Wpartial-fields
+    -Wredundant-constraints
+    -Wunused-packages
+
+  default-language: GHC2021
+  build-depends: base >=4.7 && <5
+
+  if !os(wasi)
+    build-depends: ghc-wasm-compat
+    ghc-options:
+      -fplugin
+      GHC.Wasm.FFI.Plugin
+
+library
+  import: defaults
+  hs-source-dirs: src
+  -- cabal-gild: discover src --exclude=src/**/Internal.hs --exclude=src/**/Internal/**/*.hs
+  exposed-modules: Web.URL.Shortener.Worker
+  -- cabal-gild: discover src --include=src/**/Internal.hs --include=src/**/Internal/**/*.hs
+  other-modules:
+  build-depends:
+    aeson,
+    bytestring,
+    cloudflare-worker,
+    containers,
+    dlist,
+    effectful,
+    generic-lens,
+    ghc-wasm-compat,
+    ghc-wasm-jsobjects,
+    http-types,
+    lens,
+    network-uri,
+    random-effectful,
+    safe-exceptions,
+    shortener-common,
+    steward-workers,
+    text,
+    time-effectful,
+    wasm-linear-base,
+    web-sys-hs,
+
+executable shortener-worker
+  import: defaults
+  hs-source-dirs: app
+  main-is: Main.hs
+  -- cabal-gild: discover app --exclude=app/Main.hs
+  other-modules:
+  build-depends: shortener-worker
+
+  if os(wasi)
+    ghc-options:
+      -no-hs-main
+      -optl-mexec-model=reactor
+      "-optl-Wl,--export=handlers"
+  else
+    ghc-options:
+      -threaded
+      -rtsopts
+      -with-rtsopts=-N

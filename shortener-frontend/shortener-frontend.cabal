@@ -1,0 +1,101 @@
+cabal-version: 3.4
+name: shortener-frontend
+version: 0.1.0.0
+description: Please see the README on GitHub at <https://github.com/konn/ghc-wasm-earthly/shortener-frontend#readme>
+homepage: https://github.com/konn/ghc-wasm-earthly#readme
+bug-reports: https://github.com/konn/ghc-wasm-earthly/issues
+author: Hiromi ISHII
+maintainer: konn.jinro_at_gmail.com
+copyright: (c) Hiromi ISHII 2024- present
+license: BSD-3-Clause
+license-file: LICENSE
+build-type: Simple
+tested-with:
+  ghc ==9.10.1 || ==9.10.0.20240412
+
+extra-doc-files:
+  CHANGELOG.md
+  README.md
+
+source-repository head
+  type: git
+  location: https://github.com/konn/shortner
+  subdir: shortener-frontend
+
+common defaults
+  autogen-modules: Paths_shortener_frontend
+  other-modules: Paths_shortener_frontend
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Widentities
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-export-lists
+    -Wmissing-home-modules
+    -Wpartial-fields
+    -Wredundant-constraints
+    -Wunused-packages
+
+  default-language: GHC2021
+  build-depends: base >=4.7 && <5
+
+  if !os(wasi)
+    build-depends: ghc-wasm-compat
+    ghc-options:
+      -fplugin
+      GHC.Wasm.FFI.Plugin
+
+library internal
+  visibility: private
+
+  if os(wasi)
+    build-depends: jsaddle-wasm
+    reexported-modules:
+      Language.Javascript.JSaddle.Wasm as Language.Javascript.JSaddle.Runner
+  else
+    build-depends: jsaddle-wkwebview
+    reexported-modules:
+      Language.Javascript.JSaddle.WKWebView as Language.Javascript.JSaddle.Runner
+
+library
+  import: defaults
+  hs-source-dirs: src
+  -- cabal-gild: discover src --exclude=src/**/Internal.hs --exclude=src/**/Internal/**/*.hs
+  exposed-modules: Web.URL.Shortener.Frontend
+  -- cabal-gild: discover src --include=src/**/Internal.hs --include=src/**/Internal/**/*.hs
+  other-modules:
+  build-depends:
+    aeson,
+    bytestring,
+    containers,
+    generic-lens,
+    jsaddle,
+    lens,
+    miso,
+    shortener-common,
+    shortener-frontend:internal,
+    steward-core,
+    steward-fetch,
+    text,
+    unordered-containers,
+
+executable shortener-frontend
+  import: defaults
+  hs-source-dirs: app
+  main-is: Main.hs
+  -- cabal-gild: discover app --exclude=app/Main.hs
+  other-modules:
+  ghc-options: -O2
+  build-depends: shortener-frontend
+
+  if os(wasi)
+    ghc-options:
+      -no-hs-main
+      -optl-mexec-model=reactor
+      "-optl-Wl,--export=hs_start"
+  else
+    ghc-options:
+      -threaded
+      -rtsopts
+      -with-rtsopts=-N

@@ -1,0 +1,56 @@
+constraints:
+  miso -ios -jsaddle -jsstring-only -tests,
+  any.servant ==0.20.1,
+  any.servant-lucid ==0.9.0.6
+
+allow-newer:
+  base,
+  bytestring,
+  containers,
+  deepseq,
+  filepath,
+  ghc-prim,
+  template-haskell,
+  text,
+  time
+
+source-repository-package
+  type: git
+  location: https://github.com/deepflowinc/effectful-extras
+  tag: 11fec60ba00e63beb12cd57a96396ca84bc6d3e7
+  subdir:
+    streaming-effectful
+    streaming-http-effectful
+    effectful-lens
+    path-tagged-effectful
+    random-effectful
+    time-effectful
+    log-effectful-extra
+
+source-repository-package
+  type: git
+  location: https://github.com/deepflowinc/streaming-extras
+  tag: d651e6f0c65c764155a778780cf2770f28ae23de
+  subdir:
+    streaming-SHA
+    streaming-http
+
+source-repository-package
+  type: git
+  location: https://github.com/konn/ghc-wasm-earthly
+  tag: 49c5e1d7c4fbac0c480fe84a6ca99e0c371e10bf
+  subdir:
+    cloudflare-worker
+    ghc-wasm-compat
+    ghc-wasm-jsobjects
+    wasm-linear-base
+    web-sys-hs
+    steward-core
+    steward-client
+    steward-workers
+    steward-fetch
+
+source-repository-package
+  type: git
+  location: https://github.com/amesgen/miso
+  tag: bb9ce9a3dd03a7c1ac945943f65955ab10a53011

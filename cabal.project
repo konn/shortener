@@ -1,0 +1,2 @@
+packages: */*.cabal
+import: cabal-common.project
