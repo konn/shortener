@@ -177,8 +177,8 @@ renderMain Model {..} =
                   : if isValid then ["is-primary"] else ["is-disabled"]
           entry =
             if isValid
-              then NoOp
-              else RegisterAlias name Alias {dest = fromJust muri}
+              then RegisterAlias name Alias {dest = fromJust muri}
+              else NoOp
        in [ h2_ [] ["New Alias"]
           , div_
               [class_ "field"]
