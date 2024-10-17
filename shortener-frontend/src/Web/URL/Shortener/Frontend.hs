@@ -7,8 +7,10 @@
 
 module Web.URL.Shortener.Frontend (defaultMain, defaultApp) where
 
+import Control.Concurrent (threadDelay)
 import Control.Lens
 import Control.Monad (guard)
+import Control.Monad.IO.Class (liftIO)
 import Data.Bool (bool)
 import Data.Char qualified as C
 import Data.Either (isRight)
@@ -94,8 +96,7 @@ updateModel (SetNewAliasUrl url) m =
 updateModel (RegisterAlias name alias) m =
   m
     `batchEff` [ UpdateAlias name <$> callApi (api.postAlias.call name alias)
-               , pure $ SyncAlias name
-               , pure $ OpenAlias name
+               , OpenAlias name <$ liftIO (threadDelay 1000_000)
                ]
 updateModel (UpdateEditingUrl url) m =
   case m.mode of
