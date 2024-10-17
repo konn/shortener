@@ -146,7 +146,7 @@ parseEndpoint ep = do
   let notFound = throwIO $ StatusCodeException H.notFound404 $ "Not Found: " <> LBS.pack ep
   WorkerEnv {..} <- ask
   case matchURI redirectUri ep of
-    Just [dest] -> pure $ Redirect dest
+    Just [dest] | not $ T.null dest -> pure $ Redirect dest
     Just _ -> notFound
     Nothing -> maybe notFound (pure . Admin) $ matchURI adminUri ep
 
