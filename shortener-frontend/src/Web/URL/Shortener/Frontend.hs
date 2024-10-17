@@ -11,6 +11,7 @@ import Control.Lens
 import Control.Monad (guard)
 import Data.Bool (bool)
 import Data.Char qualified as C
+import Data.Either (isRight)
 import Data.Generics.Labels ()
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -20,8 +21,8 @@ import Data.Text qualified as T
 import GHC.Generics (Generic)
 import Language.Javascript.JSaddle.Runner qualified as Runner
 import Miso
-import Miso.String (MisoString, fromMisoString)
-import Network.URI (URIAuth (..), isURI, parseURI)
+import Miso.String (MisoString, ToMisoString (toMisoString), fromMisoString)
+import Network.URI (URIAuth (..), parseURI)
 import Steward.Client.Fetch (ClientM, runClient)
 import Steward.Types
 import Web.URL.Shortener.API
@@ -66,7 +67,7 @@ updateModel (UpdateAlias alias aliasInfo) m =
   noEff m {aliases = Map.insert alias aliasInfo $ aliases m}
 updateModel (OpenAlias alias) m =
   pure (SyncAlias alias)
-    #> m {mode = FocusExistingAlias alias}
+    #> m {mode = Editing alias (maybe (Left "N/A") (Right . Alias . (.dest)) $ Map.lookup alias $ aliases m)}
 updateModel (SaveAlias name alias') m =
   m <# do
     ainfo <- callApi $ api.putAlias.call name alias'
@@ -93,6 +94,18 @@ updateModel (RegisterAlias name alias) m =
     `batchEff` [ UpdateAlias name <$> callApi (api.postAlias.call name alias)
                , pure $ OpenAlias name
                ]
+updateModel (UpdateEditingUrl url) m =
+  case m.mode of
+    Editing name _ ->
+      noEff
+        m
+          { mode =
+              Editing name $
+                maybe (Left url) (Right . Alias) $
+                  parseURI $
+                    fromMisoString url
+          }
+    _ -> noEff m
 
 callApi :: ClientM a -> JSM a
 callApi act = do
@@ -157,10 +170,10 @@ renderMain :: Model -> [View Action]
 renderMain Model {..} =
   case mode of
     Idle -> [h2_ [] ["Select an alias or create New"]]
-    FocusExistingAlias name ->
+    Editing name eith ->
       case Map.lookup name aliases of
         Nothing -> [h2_ [] ["Alias not found"]]
-        Just aliasInfo -> renderAlias name aliasInfo
+        Just aliasInfo -> renderAlias name aliasInfo eith
     CreatingNewAlias name malias ->
       let isOkName = isGoodAliasName name
           dest = either id (T.pack . show . (.dest)) malias
@@ -243,9 +256,55 @@ isGoodAliasName txt =
     && T.all C.isAlpha (T.take 1 txt)
     && T.all (\c -> C.isAlphaNum c || c == '-' || c == '_') txt
 
-renderAlias :: T.Text -> AliasInfo -> [View Action]
-renderAlias name AliasInfo {..} =
-  []
+renderAlias :: T.Text -> AliasInfo -> Either MisoString Alias -> [View Action]
+renderAlias name ainfo einfo =
+  let isValid = isRight einfo
+      dest = either id (fromString . show . (.dest)) einfo
+      entry = case einfo of
+        Left _ -> NoOp
+        Right alias -> SaveAlias name Alias {dest = alias.dest}
+      btnClass = fromString $ unwords $ "button" : ["is-primary" | isValid]
+   in [ h2_ [] ["Alias: ", code_ [] [text name]]
+      , div_
+          [class_ "field"]
+          [ label_ [class_ "label"] ["Alias URL"]
+          , div_
+              [class_ "control"]
+              [ input_
+                  [ class_ "input"
+                  , type_ "text"
+                  , value_ $ toMisoString $ show ainfo.aliasUrl
+                  , disabled_ True
+                  ]
+              ]
+          ]
+      , div_
+          [class_ "field"]
+          [ label_ [class_ "label"] ["Full URL"]
+          , div_
+              [class_ "control"]
+              [ input_
+                  [ class_ "input"
+                  , type_ "text"
+                  , value_ dest
+                  , onEnter entry
+                  , onInput UpdateEditingUrl
+                  ]
+              ]
+          ]
+      , div_
+          [class_ "field"]
+          [ div_
+              [class_ "control"]
+              [ button_
+                  [ class_ btnClass
+                  , onClick entry
+                  , disabled_ $ not isValid
+                  ]
+                  ["Save"]
+              ]
+          ]
+      ]
 
 mdiDark :: MisoString -> View a
 mdiDark name =
@@ -259,7 +318,7 @@ mdiDark name =
 
 data Mode
   = Idle
-  | FocusExistingAlias !T.Text
+  | Editing !T.Text !(Either T.Text Alias)
   | CreatingNewAlias !T.Text !(Either T.Text Alias)
   deriving (Show, Eq, Ord, Generic)
 
@@ -272,7 +331,9 @@ data Model = Model
   deriving (Show, Eq, Ord, Generic)
 
 activeAlias :: Model -> Maybe T.Text
-activeAlias = preview $ #mode . #_FocusExistingAlias
+activeAlias m = case m.mode of
+  Editing name _ -> Just name
+  _ -> Nothing
 
 data Action
   = NoOp
@@ -287,4 +348,5 @@ data Action
   | RegisterAlias !MisoString !Alias
   | SetNewAliasName !MisoString
   | SetNewAliasUrl !MisoString
+  | UpdateEditingUrl !MisoString
   deriving (Show, Eq, Ord, Generic)
