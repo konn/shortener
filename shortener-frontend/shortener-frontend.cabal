@@ -73,6 +73,7 @@ library
     jsaddle,
     lens,
     miso,
+    network-uri,
     shortener-common,
     shortener-frontend:internal,
     steward-core,

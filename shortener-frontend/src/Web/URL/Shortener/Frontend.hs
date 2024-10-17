@@ -8,16 +8,20 @@
 module Web.URL.Shortener.Frontend (defaultMain, defaultApp) where
 
 import Control.Lens
+import Control.Monad (guard)
+import Data.Bool (bool)
 import Data.Char qualified as C
 import Data.Generics.Labels ()
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromJust, isJust)
 import Data.String (IsString (..))
 import Data.Text qualified as T
 import GHC.Generics (Generic)
 import Language.Javascript.JSaddle.Runner qualified as Runner
 import Miso
-import Miso.String (MisoString)
+import Miso.String (MisoString, fromMisoString)
+import Network.URI (URIAuth (..), isURI, parseURI)
 import Steward.Client.Fetch (ClientM, runClient)
 import Steward.Types
 import Web.URL.Shortener.API
@@ -68,11 +72,28 @@ updateModel (SaveAlias name alias') m =
   m <# do
     ainfo <- callApi $ api.putAlias.call name alias'
     pure $ UpdateAlias name ainfo
-updateModel NewAlias m = noEff m {mode = CreatingNewAlias "" (Left "")}
+updateModel StartCreatingAlias m = noEff m {mode = CreatingNewAlias "" (Left "")}
 updateModel (SetNewAliasName name) m =
   case m.mode of
     CreatingNewAlias _ ainfo -> noEff m {mode = CreatingNewAlias name ainfo}
     _ -> noEff m
+updateModel (SetNewAliasUrl url) m =
+  case m.mode of
+    CreatingNewAlias name _ ->
+      noEff
+        m
+          { mode =
+              CreatingNewAlias name $
+                maybe (Left url) (Right . Alias) $
+                  parseURI $
+                    fromMisoString url
+          }
+    _ -> noEff m
+updateModel (RegisterAlias name alias) m =
+  m
+    `batchEff` [ UpdateAlias name <$> callApi (api.postAlias.call name alias)
+               , pure $ OpenAlias name
+               ]
 
 callApi :: ClientM a -> JSM a
 callApi act = do
@@ -104,9 +125,18 @@ viewModel m@Model {..} =
                 [class_ "box"]
                 [ p_
                     [class_ "menu-label"]
-                    [ a_ [onClick NewAlias, class_ "button is-small is-primary"] [mdiDark "add"]
+                    [ div_
+                        [class_ "level"]
+                        [ div_ [class_ "level-left"] [div_ [class_ "level-item"] ["Aliases"]]
+                        , div_
+                            [class_ "level-right"]
+                            [ div_
+                                [class_ "level-item"]
+                                [ a_ [onClick StartCreatingAlias, class_ "button is-small is-primary"] [mdiDark "add"]
+                                ]
+                            ]
+                        ]
                     ]
-                , p_ [class_ "menu-label"] ["Aliases"]
                 , ul_
                     [class_ "menu-list"]
                     [ li_ [] [a_ attrs [text name]]
@@ -132,9 +162,23 @@ renderMain Model {..} =
       case Map.lookup name aliases of
         Nothing -> [h2_ [] ["Alias not found"]]
         Just aliasInfo -> renderAlias name aliasInfo
-    CreatingNewAlias name mailias ->
+    CreatingNewAlias name malias ->
       let isOkName = isGoodAliasName name
+          dest = either id (T.pack . show . (.dest)) malias
           aliasClass = fromString $ unwords $ "input" : ["is-danger" | not isOkName]
+          muri = parseAbsUrl dest
+          isOkUrl = isJust muri
+          urlClass = fromString $ unwords $ "input" : ["is-danger" | not isOkUrl]
+          isValid = isOkName && isOkUrl
+          btnClass =
+            fromString $
+              unwords $
+                "button"
+                  : if isValid then ["is-primary"] else ["is-disabled"]
+          entry =
+            if isValid
+              then NoOp
+              else RegisterAlias name Alias {dest = fromJust muri}
        in [ h2_ [] ["New Alias"]
           , div_
               [class_ "field"]
@@ -148,10 +192,49 @@ renderMain Model {..} =
                       , placeholder_ "name"
                       , class_ aliasClass
                       , onInput SetNewAliasName
+                      , onEnter entry
                       ]
                   ]
               ]
+          , div_
+              [class_ "field"]
+              [ label_ [class_ "label"] ["URL"]
+              , div_
+                  [class_ "control"]
+                  [ input_
+                      [ class_ "input"
+                      , type_ "text"
+                      , value_ dest
+                      , placeholder_ "url"
+                      , class_ urlClass
+                      , onInput SetNewAliasUrl
+                      , onEnter entry
+                      ]
+                  ]
+              ]
+          , div_
+              [class_ "field"]
+              [ div_
+                  [class_ "control"]
+                  [ button_
+                      [ class_ btnClass
+                      , onClick entry
+                      , disabled_ $ not isValid
+                      ]
+                      ["Create"]
+                  ]
+              ]
           ]
+
+onEnter :: Action -> Attribute Action
+onEnter action = onKeyDown $ bool NoOp action . (== KeyCode 13)
+
+parseAbsUrl :: T.Text -> Maybe URI
+parseAbsUrl txt = do
+  uri <- parseURI $ T.unpack txt
+  guard $ maybe False (not . null . uriRegName) $ uriAuthority uri
+  guard $ not $ null $ uriScheme uri
+  pure uri
 
 isGoodAliasName :: T.Text -> Bool
 isGoodAliasName txt =
@@ -160,9 +243,6 @@ isGoodAliasName txt =
     && T.isAscii txt
     && T.all C.isAlpha (T.take 1 txt)
     && T.all (\c -> C.isAlphaNum c || c == '-' || c == '_') txt
-
-isGoodDest :: T.Text -> Bool
-isGoodDest txt = not (T.null txt) && T.isPrefixOf "http" txt
 
 renderAlias :: T.Text -> AliasInfo -> [View Action]
 renderAlias name AliasInfo {..} =
@@ -202,6 +282,8 @@ data Action
   | UpdateAlias !MisoString !AliasInfo
   | OpenAlias !MisoString
   | SaveAlias !MisoString !Alias
-  | NewAlias
+  | StartCreatingAlias
+  | RegisterAlias !MisoString !Alias
   | SetNewAliasName !MisoString
+  | SetNewAliasUrl !MisoString
   deriving (Show, Eq, Ord, Generic)
