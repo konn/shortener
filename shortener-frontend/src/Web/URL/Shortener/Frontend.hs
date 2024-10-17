@@ -12,6 +12,7 @@ import Control.Monad (guard)
 import Data.Bool (bool)
 import Data.Char qualified as C
 import Data.Either (isRight)
+import Data.Functor (void)
 import Data.Generics.Labels ()
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -19,6 +20,7 @@ import Data.Maybe (fromJust, isJust)
 import Data.String (IsString (..))
 import Data.Text qualified as T
 import GHC.Generics (Generic)
+import Language.Javascript.JSaddle qualified as JSM
 import Language.Javascript.JSaddle.Runner qualified as Runner
 import Miso
 import Miso.String (MisoString, ToMisoString (toMisoString), fromMisoString)
@@ -92,6 +94,7 @@ updateModel (SetNewAliasUrl url) m =
 updateModel (RegisterAlias name alias) m =
   m
     `batchEff` [ UpdateAlias name <$> callApi (api.postAlias.call name alias)
+               , pure $ SyncAlias name
                , pure $ OpenAlias name
                ]
 updateModel (UpdateEditingUrl url) m =
@@ -105,6 +108,15 @@ updateModel (UpdateEditingUrl url) m =
                   parseURI $
                     fromMisoString url
           }
+    _ -> noEff m
+updateModel CopyUrl m =
+  case m.mode of
+    Editing name _
+      | Just AliasInfo {..} <- Map.lookup name m.aliases ->
+          m <# do
+            clip <- JSM.eval ("navigator.clipboard" :: String)
+            void $ JSM.liftJSM $ clip JSM.# ("writeText" :: String) $ [show aliasUrl]
+            pure NoOp
     _ -> noEff m
 
 callApi :: ClientM a -> JSM a
@@ -266,16 +278,28 @@ renderAlias name ainfo einfo =
       btnClass = fromString $ unwords $ "button" : ["is-primary" | isValid]
    in [ h2_ [] ["Alias: ", code_ [] [text name]]
       , div_
-          [class_ "field"]
-          [ label_ [class_ "label"] ["Alias URL"]
-          , div_
-              [class_ "control"]
+          [class_ "field has-addons"]
+          [ p_
+              [class_ "control has-icons-left"]
               [ input_
-                  [ class_ "input"
+                  [ class_ "input is-expanded"
                   , type_ "text"
                   , value_ $ toMisoString $ show ainfo.aliasUrl
-                  , disabled_ True
+                  , readonly_ True
                   ]
+              , span_
+                  [class_ "icon is-left"]
+                  [ span_
+                      [ class_ "material-symbols-outlined"
+                      ]
+                      [text "link"]
+                  ]
+              ]
+          , p_
+              [class_ "control"]
+              [ button_
+                  [class_ "button", onClick CopyUrl]
+                  [mdiDark "content_copy"]
               ]
           ]
       , div_
@@ -349,4 +373,5 @@ data Action
   | SetNewAliasName !MisoString
   | SetNewAliasUrl !MisoString
   | UpdateEditingUrl !MisoString
+  | CopyUrl
   deriving (Show, Eq, Ord, Generic)
