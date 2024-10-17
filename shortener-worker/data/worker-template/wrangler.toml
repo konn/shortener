@@ -12,4 +12,5 @@ kv_namespaces = [
 
 [vars]
 CF_TEAM_NAME = "<Team Name>"
-
+REDIRECT_URI = "https://redirect.example.com"
+ADMIN_URI = "https://admin-redirect.example.com"

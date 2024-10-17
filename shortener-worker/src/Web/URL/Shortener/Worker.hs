@@ -66,7 +66,7 @@ handlers = toJSHandlers Handlers {fetch = fetcher}
 
 type Env =
   BindingsClass
-    '["ROOT_URI", "CF_TEAM_NAME"]
+    '["REDIRECT_URI", "ADMIN_URI", "CF_TEAM_NAME"]
     '["CF_AUD_TAG"]
     '[ '("KV", KVClass)
      , '("ASSETS", AssetsClass)
@@ -126,10 +126,10 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
 buildWorkerEnv :: (Worker Env :> es) => Eff es WorkerEnv
 buildWorkerEnv = do
   rootUri <-
-    either (throwString . ("Invalid ROOT_URI: " <>)) pure
+    either (throwString . ("Invalid REDIRECT_URI: " <>)) pure
       . eitherResult
       . J.fromJSON @URI.URI
-      . getEnv "ROOT_URI"
+      . getEnv "REDIRECT_URI"
       =<< getWorkerEnv @Env
   pure WorkerEnv {..}
 
