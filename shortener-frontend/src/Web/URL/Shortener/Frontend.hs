@@ -45,7 +45,6 @@ initialModel =
   Model
     { mode = Idle
     , aliases = mempty
-    , activeAlias = Nothing
     }
 
 api :: AdminAPI (Client ClientM)
@@ -142,7 +141,7 @@ viewModel m@Model {..} =
                     [ li_ [] [a_ attrs [text name]]
                     | name <- Map.keys aliases
                     , let attrs =
-                            if Just name == activeAlias
+                            if Just name == activeAlias m
                               then [class_ "is-active"]
                               else [onClick $ OpenAlias name]
                     ]
@@ -269,9 +268,11 @@ type AliasMap = Map T.Text AliasInfo
 data Model = Model
   { mode :: !Mode
   , aliases :: !AliasMap
-  , activeAlias :: !(Maybe MisoString)
   }
   deriving (Show, Eq, Ord, Generic)
+
+activeAlias :: Model -> Maybe T.Text
+activeAlias Model {mode = FocusExistingAlias name} = Just name
 
 data Action
   = NoOp
