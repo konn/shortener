@@ -44,6 +44,7 @@ import GHC.Generics (Generic)
 import GHC.Stack (HasCallStack)
 import GHC.Wasm.Object.Builtins
 import GHC.Wasm.Web.Generated.Headers qualified as Headers
+import Network.Cloudflare.Worker.Binding.Assets (AssetsClass, fetch)
 import Network.Cloudflare.Worker.Binding.Cache qualified as Cache
 import Network.Cloudflare.Worker.Binding.KV (KVClass)
 import Network.Cloudflare.Worker.Binding.KV qualified as KV
@@ -63,7 +64,13 @@ import Web.URL.Shortener.API
 handlers :: IO JSHandlers
 handlers = toJSHandlers Handlers {fetch = fetcher}
 
-type Env = BindingsClass '["ROOT_URI", "CF_TEAM_NAME"] '["CF_AUD_TAG"] '[ '("KV", KVClass)]
+type Env =
+  BindingsClass
+    '["ROOT_URI", "CF_TEAM_NAME"]
+    '["CF_AUD_TAG"]
+    '[ '("KV", KVClass)
+     , '("ASSETS", AssetsClass)
+     ]
 
 data WorkerEnv = WorkerEnv {rootUri :: !URI.URI}
   deriving (Show, Eq, Ord, Generic)
@@ -112,7 +119,9 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
                 }
               reqUri
               (redirect dest)
-        _ -> notFound
+        _ -> do
+          assets <- getBinding "ASSETS" <$> getWorkerEnv @Env
+          fmap Left $ unsafeEff_ $ await =<< fetch assets (inject req)
 
 buildWorkerEnv :: (Worker Env :> es) => Eff es WorkerEnv
 buildWorkerEnv = do
