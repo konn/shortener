@@ -16,7 +16,7 @@ module Web.URL.Shortener.Worker (handlers, JSHandlers, JSObject (..)) where
 import Control.Exception (Exception)
 import Control.Exception.Safe (handle, throwIO, throwString)
 import Control.Lens ((%~), (.~))
-import Control.Monad (forM, unless, when)
+import Control.Monad (forM, guard, when)
 import Data.Aeson qualified as J
 import Data.ByteString.Builder qualified as BB
 import Data.ByteString.Char8 qualified as BS8
@@ -38,7 +38,7 @@ import Effectful.Concurrent
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Prim (runPrim)
 import Effectful.Random.Static
-import Effectful.Reader.Static (Reader, asks, runReader)
+import Effectful.Reader.Static (Reader, ask, asks, runReader)
 import Effectful.Time (runClock)
 import GHC.Generics (Generic)
 import GHC.Stack (HasCallStack)
@@ -72,7 +72,7 @@ type Env =
      , '("ASSETS", AssetsClass)
      ]
 
-data WorkerEnv = WorkerEnv {rootUri :: !URI.URI}
+data WorkerEnv = WorkerEnv {redirectUri, adminUri :: !URI.URI}
   deriving (Show, Eq, Ord, Generic)
 
 fetcher :: FetchHandler Env
@@ -83,33 +83,37 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
     runReader wenv do
       env <- getWorkerEnv @Env
       let !rawTeam = getEnv "CF_TEAM_NAME" env
-      teamName <- case J.fromJSON rawTeam of
+      mteamName <- case J.fromJSON rawTeam of
         J.Error e ->
           throwString $
             "Could not parse CF_TEAM_NAME (" <> show rawTeam <> "): " <> e
         J.Success x -> pure x
       let !appAudienceID = getSecret "CF_AUD_TAG" env
-          !authCfg = CloudflareTunnelConfig {..}
+      !authCfg <-
+        case mteamName of
+          Just teamName | not (null teamName) -> pure $ Just CloudflareTunnelConfig {..}
+          _
+            | T.null appAudienceID -> pure $ Nothing
+            | otherwise -> throwString "Missing CF_TEAM_NAME"
+
       req <- getRawRequest @Env
-      root <- asks @WorkerEnv (.rootUri)
       let rawReqUri = T.unpack $ Req.getUrl req
+          withAuth act =
+            maybe
+              act
+              ( \cfg ->
+                  withCloudflareTunnelAuth' @Env cfg (const $ pure True) \case
+                    Authorised {} -> act
+                    Unauthorised {} -> throwIO $ StatusCodeException H.status403 "Forbidden"
+                    AuthError err -> throwString $ "Auth error: " <> show err
+              )
+              authCfg
+
       reqUri <-
         maybe (throwString $ "Invalid request URI: " <> show rawReqUri) pure $
           URI.parseURI rawReqUri
-      let goodReq =
-            reqUri.uriAuthority == root.uriAuthority
-              && reqUri.uriScheme == root.uriScheme
-          notFound = throwIO $ StatusCodeException H.notFound404 $ "Not Found: " <> LBS.pack rawReqUri
-      unless goodReq notFound
-      reqPaths <-
-        maybe notFound pure $
-          L.stripPrefix (decodePathSegments (BS8.pack root.uriPath)) $
-            decodePathSegments (BS8.pack reqUri.uriPath)
-      case reqPaths of
-        "api" : _ -> do
-          Right <$> withCloudflareTunnelAuth @Env authCfg (const $ pure True) \_ ->
-            fromHandlers @Env endpoints
-        [dest] ->
+      parseEndpoint rawReqUri >>= \case
+        Redirect dest ->
           Left
             <$> serveCached
               CacheOptions
@@ -119,17 +123,56 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
                 }
               reqUri
               (redirect dest)
-        _ -> do
+        Admin ("api" : _) -> withAuth do
+          Right <$> (fromHandlers @Env endpoints)
+        Admin _ -> withAuth do
           assets <- getBinding "ASSETS" <$> getWorkerEnv @Env
-          fmap Left $ unsafeEff_ $ await =<< fetch assets (inject req)
+          fmap Left
+            $ serveCached
+              CacheOptions
+                { cacheTTL = 90
+                , onlyOk = True
+                , includeQuery = True
+                }
+              reqUri
+            $ unsafeEff_
+            $ await =<< fetch assets (inject req)
+
+data Endpoint = Admin [T.Text] | Redirect T.Text
+  deriving (Show, Eq, Ord, Generic)
+
+parseEndpoint :: (Reader WorkerEnv :> es) => String -> Eff es Endpoint
+parseEndpoint ep = do
+  let notFound = throwIO $ StatusCodeException H.notFound404 $ "Not Found: " <> LBS.pack ep
+  WorkerEnv {..} <- ask
+  case matchURI redirectUri ep of
+    Just [dest] -> pure $ Redirect dest
+    Just _ -> notFound
+    Nothing -> maybe notFound (pure . Admin) $ matchURI adminUri ep
+
+matchURI :: URI -> String -> Maybe [Text]
+matchURI root u = do
+  uri <- URI.parseURI u
+  let rootPaths = decodePathSegments $ BS8.pack $ root.uriPath
+      reqPaths = decodePathSegments $ BS8.pack $ uri.uriPath
+  guard $
+    root.uriAuthority == uri.uriAuthority
+      && root.uriScheme == uri.uriScheme
+  L.stripPrefix rootPaths reqPaths
 
 buildWorkerEnv :: (Worker Env :> es) => Eff es WorkerEnv
 buildWorkerEnv = do
-  rootUri <-
+  redirectUri <-
     either (throwString . ("Invalid REDIRECT_URI: " <>)) pure
       . eitherResult
       . J.fromJSON @URI.URI
       . getEnv "REDIRECT_URI"
+      =<< getWorkerEnv @Env
+  adminUri <-
+    either (throwString . ("Invalid ADMIN_URI: " <>)) pure
+      . eitherResult
+      . J.fromJSON @URI.URI
+      . getEnv "ADMIN_URI"
       =<< getWorkerEnv @Env
   pure WorkerEnv {..}
 
@@ -252,7 +295,7 @@ postAlias alias Alias {..} = do
 
 aliasUrlFor :: (Reader WorkerEnv :> es) => Text -> Eff es URI
 aliasUrlFor alias = do
-  root <- asks @WorkerEnv (.rootUri)
+  root <- asks @WorkerEnv (.redirectUri)
   pure $
     root
       & uriPathLens

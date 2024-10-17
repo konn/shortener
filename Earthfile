@@ -17,10 +17,10 @@ build:
   ARG wasm=${outdir}.wasm
   ENV MOUNT_GLOBAL_STORE="type=cache,mode=0777,id=${target}#ghc-${GHC_VER}#global-store,sharing=shared,target=/root/.ghc-wasm/.cabal/store"
   ENV MOUNT_DIST_NEWSTYLE="type=cache,mode=0777,id=${target}#ghc${GHC_VER}#dist-newstyle,sharing=shared,target=dist-newstyle"
-  COPY --keep-ts . .
+  COPY . .
   RUN --mount ${MOUNT_GLOBAL_STORE} \
       --mount ${MOUNT_DIST_NEWSTYLE} \
-      ${CABAL} update --index-state=2024-10-17T03:31:31Z
+      ${CABAL} update --index-state=2024-10-17T07:25:36Z
   RUN --mount ${MOUNT_GLOBAL_STORE} \
       --mount ${MOUNT_DIST_NEWSTYLE} \
       ${CABAL} build --only-dependencies ${target}
@@ -86,5 +86,5 @@ worker:
   COPY shortener-worker/data/worker-template/ ./dist/
   COPY (+patch-jsffi-for-cf/dist --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm) ./dist/src
   RUN cd ./dist && npm i
-  COPY +frontend/dist/* ./dist/assets/admin
+  COPY +frontend/dist/* ./dist/assets/
   SAVE ARTIFACT ./dist AS LOCAL _build/worker

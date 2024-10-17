@@ -36,11 +36,11 @@ source-repository-package
   location: https://github.com/amesgen/jsaddle-wasm
   tag: be129c788f8ca1ea2e9cc1515397c1a46d02bb41
 
-package QuickCheck
-  flags: -templateHaskell
-
 package reflection
   flags: -template-haskell
+
+package QuickCheck
+  flags: -templateHaskell
 
 allow-newer:
   base,

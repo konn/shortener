@@ -238,3 +238,4 @@ dist
 .pnp.*
 _build
 .dev.vars
+.wrangler
