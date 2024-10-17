@@ -11,22 +11,26 @@ ENV CABAL=wasm32-wasi-cabal --project-file=cabal-wasm.project \
 --with-hc-pkg=wasm32-wasi-ghc-pkg-${GHC_VER} \
 --with-hsc2hs=wasm32-wasi-hsc2hs-${GHC_VER}
 
-build:
-  ARG target
-  ARG outdir=$(echo ${target} | cut -d: -f3)
-  ARG wasm=${outdir}.wasm
-  ENV MOUNT_GLOBAL_STORE="type=cache,mode=0777,id=${target}#ghc-${GHC_VER}#global-store,sharing=shared,target=/root/.ghc-wasm/.cabal/store"
-  ENV MOUNT_DIST_NEWSTYLE="type=cache,mode=0777,id=${target}#ghc${GHC_VER}#dist-newstyle,sharing=shared,target=dist-newstyle"
-  COPY . .
+ENV MOUNT_GLOBAL_STORE="type=cache,mode=0777,id=all#ghc-${GHC_VER}#global-store,sharing=shared,target=/root/.ghc-wasm/.cabal/store"
+ENV MOUNT_DIST_NEWSTYLE="type=cache,mode=0777,id=all#ghc${GHC_VER}#dist-newstyle,sharing=shared,target=dist-newstyle"
+
+build-all:
+  COPY --keep-ts . .
   RUN --mount ${MOUNT_GLOBAL_STORE} \
       --mount ${MOUNT_DIST_NEWSTYLE} \
       ${CABAL} update --index-state=2024-10-17T07:25:36Z
   RUN --mount ${MOUNT_GLOBAL_STORE} \
       --mount ${MOUNT_DIST_NEWSTYLE} \
-      ${CABAL} build --only-dependencies ${target}
+      ${CABAL} build --only-dependencies all
   RUN --mount ${MOUNT_GLOBAL_STORE} \
       --mount ${MOUNT_DIST_NEWSTYLE} \
-      ${CABAL} build  ${target}
+      ${CABAL} build all
+
+build:
+  FROM +build-all
+  ARG target
+  ARG outdir=$(echo ${target} | cut -d: -f3)
+  ARG wasm=${outdir}.wasm
   # From frontend/build.sh in tweag/ghc-wasm-miso-examples
   LET HS_WASM_PATH=$(${CABAL} list-bin -v0 ${target})
   LET WASM_LIB=$(wasm32-wasi-ghc --print-libdir)

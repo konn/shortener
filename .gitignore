@@ -239,3 +239,4 @@ dist
 _build
 .dev.vars
 .wrangler
+workspace

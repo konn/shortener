@@ -63,31 +63,3 @@ library
     steward-core,
     text,
     unordered-containers,
-
-executable shortener-common
-  import: defaults
-  hs-source-dirs: app
-  main-is: Main.hs
-  -- cabal-gild: discover app --exclude=app/Main.hs
-  other-modules:
-  ghc-options:
-    -threaded
-    -rtsopts
-    -with-rtsopts=-N
-
-  build-depends: shortener-common
-
-test-suite shortener-common-test
-  import: defaults
-  type: exitcode-stdio-1.0
-  main-is: Test.hs
-  hs-source-dirs: test
-  -- cabal-gild: discover test --exclude=test/Test.hs
-  other-modules:
-  ghc-options:
-    -threaded
-    -O2
-    -rtsopts
-    -with-rtsopts=-N
-
-  build-depends: shortener-common
