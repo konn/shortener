@@ -4,7 +4,7 @@ main = "src/worker.js"
 compatibility_date = "2024-09-19"
 compatibility_flags = ["nodejs_compat"]
 
-assets = { directory = "assets", "binding" = "ASSETS" }
+assets = { directory = "./assets/", "binding" = "ASSETS" }
 
 kv_namespaces = [
   { binding = "KV", id = "<KV id>" }
