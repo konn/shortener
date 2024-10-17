@@ -272,7 +272,7 @@ data Model = Model
   deriving (Show, Eq, Ord, Generic)
 
 activeAlias :: Model -> Maybe T.Text
-activeAlias Model {mode = FocusExistingAlias name} = Just name
+activeAlias = preview $ #mode . #_FocusExistingAlias
 
 data Action
   = NoOp
