@@ -7,47 +7,21 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-22.04
-    env:
-      ghc: 9.10.1
+    permissions:
+      contents: read
+      packages: write
     steps:
-    - uses: actions/checkout@v3
-    - name: Calculate hash keys
-      uses: actions/github-script@v6
-      id: cache-keys
+    - uses: actions/checkout@v4
+    - name: Setup Earthly
+      uses: earthly/actions-setup@v1
       with:
-        script: |
-          const script = require('./ci-scripts/calc-cache-keys.js')
-          await script({ os: "ubuntu", plan: "ghc-${{env.ghc}}", path: "cabal.project", core, glob })
-    - name: Setup haskell
-      uses: haskell-actions/setup@v2
+        version: "latest"
+        github-token: ${{ github.token }}
+    - name: Build Worker
+      run: earthly --ci --push --remote-cache=ghcr.io/konn/shortener/build-cache:cache +worker
+    - name: Create Tarball
+      run: tar --directory=_build -cvf worker.tar.xz worker
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
       with:
-        ghc-version: 9.10.1
-        cabal-version: 3.12.1.0
-    - name: Restore ~/.cabal/store Cache
-      uses: actions/cache/restore@v4
-      with:
-        path: ~/.cabal/store
-        key: ${{ steps.cache-keys.outputs.store }}
-        restore-keys: ${{ steps.cache-keys.outputs.store-restore }}
-    - name: Restore dist-newstyle Cache
-      uses: actions/cache/restore@v4
-      with:
-        path: dist-newstyle
-        key: ${{ steps.cache-keys.outputs.dist }}
-        restore-keys: ${{ steps.cache-keys.outputs.dist-restore }}
-    - name: Cabal update
-      run: cabal update
-    - name: Build dependencies
-      run: cabal build all --only-dependencies
-    - name: Save ~/.cabal/store cache
-      uses: actions/cache/save@v4
-      with:
-        path: ~/.cabal/store
-        key: ${{ steps.cache-keys.outputs.store }}
-    - name: Build
-      run: cabal build all
-    - name: Save dist-newstyle cache
-      uses: actions/cache/save@v4
-      with:
-        path: dist-newstyle
-        key: ${{ steps.cache-keys.outputs.dist }}
+        path: worker.tar.xz
