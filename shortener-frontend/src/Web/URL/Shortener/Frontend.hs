@@ -12,9 +12,11 @@ import Control.Lens
 import Control.Monad (guard)
 import Control.Monad.IO.Class (liftIO)
 import Data.Bool (bool)
+import Data.ByteString.Char8 qualified as BS8
 import Data.Either (isRight)
 import Data.Functor (void)
 import Data.Generics.Labels ()
+import Data.List qualified as L
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust, isJust)
@@ -24,7 +26,8 @@ import GHC.Generics (Generic)
 import Language.Javascript.JSaddle qualified as JSM
 import Language.Javascript.JSaddle.Runner qualified as Runner
 import Miso
-import Miso.String (MisoString, ToMisoString (toMisoString), fromMisoString)
+import Miso.String (MisoString, ToMisoString (toMisoString))
+import Network.HTTP.Types.URI (decodePathSegments)
 import Network.URI (URIAuth (..), parseURI)
 import Steward.Client.Fetch (ClientM, runClient)
 import Steward.Types
@@ -34,21 +37,28 @@ defaultMain :: IO ()
 defaultMain = Runner.run defaultApp
 
 defaultApp :: JSM ()
-defaultApp = startApp App {subs = [], view = viewModel, ..}
+defaultApp = do
+  uri <-
+    getCurrentURI
+      <&> #uriPath .~ ""
+      <&> #uriQuery .~ ""
+      <&> #uriFragment .~ ""
+  let model = initialModel uri
+  startApp App {subs = [], view = viewModel, ..}
   where
     initialAction = Init
-    model = initialModel
     update = updateModel
 
     events = defaultEvents
     mountPoint = Nothing
     logLevel = Off
 
-initialModel :: Model
-initialModel =
+initialModel :: URI -> Model
+initialModel rootUri =
   Model
     { mode = Idle
     , aliases = mempty
+    , rootUri
     }
 
 api :: AdminAPI (Client ClientM)
@@ -88,8 +98,7 @@ updateModel (SetNewAliasUrl url) m =
           { mode =
               CreatingNewAlias name $
                 maybe (Left url) (Right . Alias) $
-                  parseURI $
-                    fromMisoString url
+                  parseAbsUrl m url
           }
     _ -> noEff m
 updateModel (RegisterAlias name alias) m =
@@ -105,8 +114,7 @@ updateModel (UpdateEditingUrl url) m =
           { mode =
               Editing name $
                 maybe (Left url) (Right . Alias) $
-                  parseURI $
-                    fromMisoString url
+                  parseAbsUrl m url
           }
     _ -> noEff m
 updateModel CopyUrl m =
@@ -179,7 +187,7 @@ viewModel m@Model {..} =
     ]
 
 renderMain :: Model -> [View Action]
-renderMain Model {..} =
+renderMain m@Model {..} =
   case mode of
     Idle -> [h2_ [] ["Select an alias or create New"]]
     Editing name eith ->
@@ -191,7 +199,7 @@ renderMain Model {..} =
           isOkName = isRight aliasName
           dest = either id (T.pack . show . (.dest)) malias
           aliasClass = fromString $ unwords $ "input" : ["is-danger" | not isOkName]
-          muri = parseAbsUrl dest
+          muri = parseAbsUrl m dest
           isOkUrl = isJust muri
           urlClass = fromString $ unwords $ "input" : ["is-danger" | not isOkUrl]
           isValid = isOkName && isOkUrl
@@ -254,12 +262,18 @@ renderMain Model {..} =
 onEnter :: Action -> Attribute Action
 onEnter action = onKeyDown $ bool NoOp action . (== KeyCode 13)
 
-parseAbsUrl :: T.Text -> Maybe URI
-parseAbsUrl txt = do
+parseAbsUrl :: Model -> T.Text -> Maybe URI
+parseAbsUrl m txt = do
   uri <- parseURI $ T.unpack txt
   guard $ maybe False (not . null . uriRegName) $ uriAuthority uri
   guard $ not $ null $ uriScheme uri
+  guard $ not $ uri `isSubUriOf` m.rootUri
   pure uri
+
+isSubUriOf :: URI -> URI -> Bool
+isSubUriOf sub super =
+  fmap uriRegName super.uriAuthority == fmap uriRegName sub.uriAuthority
+    && decodePathSegments (BS8.pack super.uriPath) `L.isPrefixOf` decodePathSegments (BS8.pack sub.uriPath)
 
 renderAlias :: AliasName -> AliasInfo -> Either MisoString Alias -> [View Action]
 renderAlias name ainfo einfo =
@@ -273,9 +287,9 @@ renderAlias name ainfo einfo =
       , div_
           [class_ "field has-addons"]
           [ p_
-              [class_ "control has-icons-left"]
+              [class_ "control has-icons-left is-expanded"]
               [ input_
-                  [ class_ "input is-expanded"
+                  [ class_ "input"
                   , type_ "text"
                   , value_ $ toMisoString $ show ainfo.aliasUrl
                   , readonly_ True
@@ -344,6 +358,7 @@ type AliasMap = Map AliasName AliasInfo
 data Model = Model
   { mode :: !Mode
   , aliases :: !AliasMap
+  , rootUri :: !URI
   }
   deriving (Show, Eq, Ord, Generic)
 

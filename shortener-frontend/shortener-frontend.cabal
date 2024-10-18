@@ -70,6 +70,7 @@ library
     bytestring,
     containers,
     generic-lens,
+    http-types,
     jsaddle,
     lens,
     miso,
