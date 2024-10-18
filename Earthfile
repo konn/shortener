@@ -16,7 +16,12 @@ ENV MOUNT_GLOBAL_STORE="type=cache,mode=0777,id=all#ghc-${GHC_VER}#global-store,
 ENV MOUNT_DIST_NEWSTYLE="type=cache,mode=0777,id=all#ghc${GHC_VER}#dist-newstyle,sharing=shared,target=dist-newstyle"
 
 build-all:
-  COPY --keep-ts . .
+  COPY --keep-ts ./*.project ./
+  COPY --keep-ts ./*.freeze ./
+  COPY --keep-ts ./build-scripts ./build-scripts
+  COPY --keep-ts ./shortener-common ./shortener-common
+  COPY --keep-ts ./shortener-frontend ./shortener-frontend
+  COPY --keep-ts ./shortener-worker ./shortener-worker
   RUN --mount ${MOUNT_GLOBAL_STORE} \
       --mount ${MOUNT_DIST_NEWSTYLE} \
       ${CABAL} update --index-state=2024-10-17T07:25:36Z
@@ -29,7 +34,7 @@ build-all:
 
 build:
   FROM +build-all
-  BUILD +build-all
+  BUILD  --platform=linux/amd64 +build-all
   ARG target
   ARG outdir=$(echo ${target} | cut -d: -f3)
   ARG wasm=${outdir}.wasm
@@ -47,7 +52,7 @@ optimised-wasm:
   ARG outdir=$(echo ${target} | cut -d: -f3)
   ARG wasm=${outdir}.wasm
   RUN mkdir -p dist/
-  BUILD +build --target=${target} --outdir=${outdir} --wasm=${wasm}.orig
+  BUILD --platform=linux/amd64 +build --target=${target} --outdir=${outdir} --wasm=${wasm}.orig
   COPY (+build/dist/${wasm}.orig --target=${target} --outdir=${outdir} --wasm=${wasm}.orig) ./dist/
   RUN wizer --allow-wasi --wasm-bulk-memory true --init-func _initialize -o dist/${wasm} dist/${wasm}.orig
   RUN wasm-opt -Oz dist/${wasm} -o dist/${wasm}
@@ -60,7 +65,7 @@ patch-jsffi-for-cf:
   ARG target
   ARG outdir=$(echo ${target} | cut -d: -f3)
   ARG wasm=${outdir}.wasm
-  BUILD +optimised-wasm --target=${target} --outdir=${outdir} --wasm=${wasm}
+  BUILD --platform=linux/amd64 +optimised-wasm --target=${target} --outdir=${outdir} --wasm=${wasm}
   COPY  (+optimised-wasm/dist --target=${target} --outdir=${outdir} --wasm=${wasm}) ./dist
   LET PATCHER=./js-ffi-patcher.mjs
   COPY ./build-scripts/jsffi-patcher.mjs ${PATCHER}
@@ -68,7 +73,7 @@ patch-jsffi-for-cf:
   SAVE ARTIFACT ./dist
 
 frontend:
-  BUILD +optimised-wasm --target=shortener-frontend:exe:shortener-frontend
+  BUILD --platform=linux/amd64 +optimised-wasm --target=shortener-frontend:exe:shortener-frontend
   COPY (+optimised-wasm/dist --target=shortener-frontend:exe:shortener-frontend) ./dist
   LET ORIG_WASM=shortener-frontend.wasm
   LET SHASUM_WASM=$(sha1sum dist/${ORIG_WASM} | cut -c1-7)
@@ -88,15 +93,14 @@ frontend:
   RUN mv dist/index.js dist/${INDEX_JS_FINAL}
   COPY shortener-frontend/data/index.html dist/index.html
   RUN sed -i "s/index.js/${INDEX_JS_FINAL}/g" dist/index.html
-
-  SAVE ARTIFACT ./dist AS LOCAL _build/frontend
+  SAVE ARTIFACT ./dist
 
 worker:
   COPY shortener-worker/data/worker-template/ ./dist/
-  BUILD +patch-jsffi-for-cf --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm
+  BUILD --platform=linux/amd64  +patch-jsffi-for-cf --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm
   COPY (+patch-jsffi-for-cf/dist --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm) ./dist/src
   RUN cd ./dist && npm i
-  BUILD +frontend
+  BUILD  --platform=linux/amd64 +frontend
   COPY +frontend/dist/* ./dist/assets/admin/
   SAVE ARTIFACT ./dist AS LOCAL _build/worker
-  SAVE IMAGE
+  SAVE IMAGE --cache-from "${GLOBAL_CACHE_IMAGE}:cache" --push "${GLOBAL_CACHE_IMAGE}:cache"
