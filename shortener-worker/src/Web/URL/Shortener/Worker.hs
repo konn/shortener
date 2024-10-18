@@ -16,7 +16,7 @@ module Web.URL.Shortener.Worker (handlers, JSHandlers, JSObject (..)) where
 import Control.Exception (Exception)
 import Control.Exception.Safe (handle, throwIO, throwString)
 import Control.Lens ((%~), (.~))
-import Control.Monad (forM, guard, when)
+import Control.Monad (forM, guard, join, when)
 import Data.Aeson qualified as J
 import Data.ByteString.Builder qualified as BB
 import Data.ByteString.Char8 qualified as BS8
@@ -66,13 +66,13 @@ handlers = toJSHandlers Handlers {fetch = fetcher}
 
 type Env =
   BindingsClass
-    '["REDIRECT_URI", "ADMIN_URI", "CF_TEAM_NAME"]
+    '["ROOT_URI", "CF_TEAM_NAME"]
     '["CF_AUD_TAG"]
     '[ '("KV", KVClass)
      , '("ASSETS", AssetsClass)
      ]
 
-data WorkerEnv = WorkerEnv {redirectUri, adminUri :: !URI.URI}
+data WorkerEnv = WorkerEnv {rootUri, redirectUri, adminUri :: !URI.URI}
   deriving (Show, Eq, Ord, Generic)
 
 fetcher :: FetchHandler Env
@@ -82,6 +82,7 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
     wenv <- buildWorkerEnv
     runReader wenv do
       env <- getWorkerEnv @Env
+      unsafeEff_ $ consoleLog $ fromText $ T.pack $ "WorkerEnv: " <> show wenv
       let !rawTeam = getEnv "CF_TEAM_NAME" env
       mteamName <- case J.fromJSON rawTeam of
         J.Error e ->
@@ -97,6 +98,7 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
             | otherwise -> throwString "Missing CF_TEAM_NAME"
 
       req <- getRawRequest @Env
+      unsafeEff_ $ consoleLog $ fromText $ "Req Url: " <> Req.getUrl req
       let rawReqUri = T.unpack $ Req.getUrl req
           withAuth act =
             maybe
@@ -113,7 +115,8 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
         maybe (throwString $ "Invalid request URI: " <> show rawReqUri) pure $
           URI.parseURI rawReqUri
       parseEndpoint rawReqUri >>= \case
-        Redirect dest ->
+        Redirect dest -> do
+          liftIO $ consoleLog $ fromText $ "Redirecting to: " <> fromAliasName dest
           Left
             <$> serveCached
               CacheOptions
@@ -123,9 +126,11 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
                 }
               reqUri
               (redirect dest)
-        Admin ("api" : _) -> withAuth do
+        Admin api@("api" : _) -> withAuth do
+          liftIO $ consoleLog $ fromText $ "Adming to: " <> T.pack (show api)
           Right <$> (fromHandlers @Env endpoints)
-        Admin _ -> withAuth do
+        Admin adm -> withAuth do
+          liftIO $ consoleLog $ fromText $ "Adming to: " <> T.pack (show adm)
           assets <- getBinding "ASSETS" <$> getWorkerEnv @Env
           fmap Left
             $ serveCached
@@ -138,17 +143,19 @@ fetcher = runWorker' $ handle (fmap Right . handleStatus) do
             $ unsafeEff_
             $ await =<< fetch assets (inject req)
 
-data Endpoint = Admin [T.Text] | Redirect T.Text
+data Endpoint = Admin [T.Text] | Redirect AliasName
   deriving (Show, Eq, Ord, Generic)
 
 parseEndpoint :: (Reader WorkerEnv :> es) => String -> Eff es Endpoint
 parseEndpoint ep = do
+  unsafeEff_ $ consoleLog $ fromText $ "Parsing endpoint: " <> T.pack ep
   let notFound = throwIO $ StatusCodeException H.notFound404 $ "Not Found: " <> LBS.pack ep
   WorkerEnv {..} <- ask
-  case matchURI redirectUri ep of
-    Just [dest] | not $ T.null dest -> pure $ Redirect dest
-    Just _ -> notFound
-    Nothing -> maybe notFound (pure . Admin) $ matchURI adminUri ep
+  case matchURI adminUri ep of
+    Just adms -> pure $ Admin adms
+    Nothing -> case matchURI redirectUri ep of
+      Just [alias] | Right name <- parseAliasName alias -> pure $ Redirect name
+      _ -> notFound
 
 matchURI :: URI -> String -> Maybe [Text]
 matchURI root u = do
@@ -162,19 +169,20 @@ matchURI root u = do
 
 buildWorkerEnv :: (Worker Env :> es) => Eff es WorkerEnv
 buildWorkerEnv = do
-  redirectUri <-
+  rootUri <-
     either (throwString . ("Invalid REDIRECT_URI: " <>)) pure
       . eitherResult
       . J.fromJSON @URI.URI
-      . getEnv "REDIRECT_URI"
+      . getEnv "ROOT_URI"
       =<< getWorkerEnv @Env
-  adminUri <-
-    either (throwString . ("Invalid ADMIN_URI: " <>)) pure
-      . eitherResult
-      . J.fromJSON @URI.URI
-      . getEnv "ADMIN_URI"
-      =<< getWorkerEnv @Env
+  let redirectUri = rootUri
+  let adminUri = rootUri & addPathSegments ["admin"]
   pure WorkerEnv {..}
+
+addPathSegments :: [T.Text] -> URI -> URI
+addPathSegments fps =
+  uriPathLens
+    %~ LBS.unpack . BB.toLazyByteString . encodePathSegments . (<> fps) . decodePathSegments . BS8.pack
 
 handleStatus :: StatusCodeException -> Eff [Worker Env, IOE] StewardResponse
 handleStatus (StatusCodeException code msg) =
@@ -241,11 +249,11 @@ serveCached opts uri act = do
         liftIO $ waitUntil ctx =<< Cache.put keyReq resp
       pure resp
 
-redirect :: (Worker Env :> es, IOE :> es) => Text -> Eff es WorkerResponse
+redirect :: (Worker Env :> es, IOE :> es) => AliasName -> Eff es WorkerResponse
 redirect alias = do
   url <-
-    maybe (throwIO $ StatusCodeException H.notFound404 $ "URL Alias Not Found: " <> LBS.fromStrict (TE.encodeUtf8 alias)) pure
-      =<< withKV (\kv -> KV.get kv (T.unpack alias))
+    maybe (throwIO $ StatusCodeException H.notFound404 $ "URL Alias Not Found: " <> LBS.fromStrict (TE.encodeUtf8 $ fromAliasName alias)) pure
+      =<< withKV (\kv -> KV.get kv $ T.unpack $ fromAliasName alias)
   fromStewardResponse
     StewardResponse
       { headers = [("location", BS8.pack url)]
@@ -262,12 +270,12 @@ withKV f = do
   !kv <- getBinding "KV" <$> getWorkerEnv @Env
   unsafeEff_ $ f kv
 
-getAlias :: (HasCallStack, Worker Env :> es, Reader WorkerEnv :> es) => Text -> Eff es AliasInfo
+getAlias :: (HasCallStack, Worker Env :> es, Reader WorkerEnv :> es) => AliasName -> Eff es AliasInfo
 getAlias alias =
   maybe
     ( throwIO $
         StatusCodeException H.notFound404 $
-          "No alias found: " <> LBS.fromStrict (TE.encodeUtf8 alias)
+          "No alias found: " <> LBS.fromStrict (TE.encodeUtf8 $ fromAliasName alias)
     )
     pure
     =<< getAliasInfo alias
@@ -277,45 +285,45 @@ postAlias ::
   , Worker Env :> es
   , Reader WorkerEnv :> es
   ) =>
-  Text ->
+  AliasName ->
   Alias ->
   Eff es AliasInfo
 postAlias alias Alias {..} = do
   minfo <- getAliasInfo alias
   when (isJust minfo) do
-    throwIO $ StatusCodeException H.conflict409 $ "Alias already exists: " <> LBS.fromStrict (TE.encodeUtf8 alias)
+    throwIO $ StatusCodeException H.conflict409 $ "Alias already exists: " <> LBS.fromStrict (TE.encodeUtf8 $ fromAliasName alias)
   withKV \kv ->
     KV.put
       kv
       KV.PutOptions {expirationTtl = Nothing, metadata = Nothing, expiration = Nothing}
-      (T.unpack alias)
+      (T.unpack $ fromAliasName alias)
       (show dest)
   aliasUrl <- aliasUrlFor alias
   pure AliasInfo {..}
 
-aliasUrlFor :: (Reader WorkerEnv :> es) => Text -> Eff es URI
+aliasUrlFor :: (Reader WorkerEnv :> es) => AliasName -> Eff es URI
 aliasUrlFor alias = do
   root <- asks @WorkerEnv (.redirectUri)
   pure $
     root
       & uriPathLens
-        %~ LBS.unpack . BB.toLazyByteString . encodePathSegments . (<> [alias]) . decodePathSegments . BS8.pack
+        %~ LBS.unpack . BB.toLazyByteString . encodePathSegments . (<> [fromAliasName alias]) . decodePathSegments . BS8.pack
 
-putAlias :: (Worker Env :> es, Reader WorkerEnv :> es) => Text -> Alias -> Eff es AliasInfo
+putAlias :: (Worker Env :> es, Reader WorkerEnv :> es) => AliasName -> Alias -> Eff es AliasInfo
 putAlias alias Alias {..} = do
   minfo <- getAliasInfo alias
   when (isNothing minfo) do
-    throwIO $ StatusCodeException H.notFound404 $ "Alias not found: " <> LBS.fromStrict (TE.encodeUtf8 alias)
+    throwIO $ StatusCodeException H.notFound404 $ "Alias not found: " <> LBS.fromStrict (TE.encodeUtf8 $ fromAliasName alias)
   withKV \kv ->
     KV.put
       kv
       KV.PutOptions {expirationTtl = Nothing, metadata = Nothing, expiration = Nothing}
-      (T.unpack alias)
+      (T.unpack $ fromAliasName alias)
       (show dest)
   aliasUrl <- aliasUrlFor alias
   pure AliasInfo {..}
 
-listAliases :: (HasCallStack, Worker Env :> es, Reader WorkerEnv :> es) => Eff es (Map Text AliasInfo)
+listAliases :: (HasCallStack, Worker Env :> es, Reader WorkerEnv :> es) => Eff es (Map AliasName AliasInfo)
 listAliases = collect =<< withKV (go Nothing mempty)
   where
     go !mcursor !keys kv = do
@@ -336,18 +344,19 @@ listAliases = collect =<< withKV (go Nothing mempty)
       fmap (Map.fromList . catMaybes)
         . mapM do
           \k -> do
-            info <- getAliasInfo $ T.pack k.name
-            pure $ (T.pack k.name,) <$> info
+            let name =
+                  either (const Nothing) Just $ parseAliasName $ T.pack k.name
+            fmap join $ forM name \kname -> fmap (kname,) <$> getAliasInfo kname
         . DL.toList
 
 getAliasInfo ::
   (Worker Env :> es, Reader WorkerEnv :> es) =>
-  T.Text ->
+  AliasName ->
   Eff es (Maybe AliasInfo)
 getAliasInfo key = do
-  murl <- withKV \kv -> KV.get kv $ T.unpack key
+  murl <- withKV \kv -> KV.get kv $ T.unpack $ fromAliasName key
   forM murl \url -> do
-    dest <- maybe (throwString $ "Invalid redirect destination: " <> url <> " for alias: " <> T.unpack key) pure $ URI.parseURI url
+    dest <- maybe (throwString $ "Invalid redirect destination: " <> url <> " for alias: " <> T.unpack (fromAliasName key)) pure $ URI.parseURI url
     aliasUrl <- aliasUrlFor key
     pure AliasInfo {aliasUrl, dest}
 
@@ -355,3 +364,6 @@ eitherResult :: J.Result a -> Either String a
 eitherResult = \case
   J.Error err -> Left err
   J.Success x -> Right x
+
+foreign import javascript unsafe "console.log($1)"
+  consoleLog :: USVString -> IO ()

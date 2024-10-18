@@ -12,7 +12,6 @@ import Control.Lens
 import Control.Monad (guard)
 import Control.Monad.IO.Class (liftIO)
 import Data.Bool (bool)
-import Data.Char qualified as C
 import Data.Either (isRight)
 import Data.Functor (void)
 import Data.Generics.Labels ()
@@ -164,7 +163,7 @@ viewModel m@Model {..} =
                     ]
                 , ul_
                     [class_ "menu-list"]
-                    [ li_ [] [a_ attrs [text name]]
+                    [ li_ [] [a_ attrs [text $ fromAliasName name]]
                     | name <- Map.keys aliases
                     , let attrs =
                             if Just name == activeAlias m
@@ -188,7 +187,8 @@ renderMain Model {..} =
         Nothing -> [h2_ [] ["Alias not found"]]
         Just aliasInfo -> renderAlias name aliasInfo eith
     CreatingNewAlias name malias ->
-      let isOkName = isGoodAliasName name
+      let aliasName = parseAliasName name
+          isOkName = isRight aliasName
           dest = either id (T.pack . show . (.dest)) malias
           aliasClass = fromString $ unwords $ "input" : ["is-danger" | not isOkName]
           muri = parseAbsUrl dest
@@ -202,7 +202,7 @@ renderMain Model {..} =
                   : if isValid then ["is-primary"] else ["is-disabled"]
           entry =
             if isValid
-              then RegisterAlias name Alias {dest = fromJust muri}
+              then RegisterAlias (either error id aliasName) Alias {dest = fromJust muri}
               else NoOp
        in [ h2_ [] ["New Alias"]
           , div_
@@ -261,15 +261,7 @@ parseAbsUrl txt = do
   guard $ not $ null $ uriScheme uri
   pure uri
 
-isGoodAliasName :: T.Text -> Bool
-isGoodAliasName txt =
-  not (T.null txt)
-    && txt /= "api"
-    && T.isAscii txt
-    && T.all C.isAlpha (T.take 1 txt)
-    && T.all (\c -> C.isAlphaNum c || c == '-' || c == '_') txt
-
-renderAlias :: T.Text -> AliasInfo -> Either MisoString Alias -> [View Action]
+renderAlias :: AliasName -> AliasInfo -> Either MisoString Alias -> [View Action]
 renderAlias name ainfo einfo =
   let isValid = isRight einfo
       dest = either id (fromString . show . (.dest)) einfo
@@ -277,7 +269,7 @@ renderAlias name ainfo einfo =
         Left _ -> NoOp
         Right alias -> SaveAlias name Alias {dest = alias.dest}
       btnClass = fromString $ unwords $ "button" : ["is-primary" | isValid]
-   in [ h2_ [] ["Alias: ", code_ [] [text name]]
+   in [ h2_ [] ["Alias: ", code_ [] [text $ fromAliasName name]]
       , div_
           [class_ "field has-addons"]
           [ p_
@@ -343,11 +335,11 @@ mdiDark name =
 
 data Mode
   = Idle
-  | Editing !T.Text !(Either T.Text Alias)
+  | Editing !AliasName !(Either T.Text Alias)
   | CreatingNewAlias !T.Text !(Either T.Text Alias)
   deriving (Show, Eq, Ord, Generic)
 
-type AliasMap = Map T.Text AliasInfo
+type AliasMap = Map AliasName AliasInfo
 
 data Model = Model
   { mode :: !Mode
@@ -355,7 +347,7 @@ data Model = Model
   }
   deriving (Show, Eq, Ord, Generic)
 
-activeAlias :: Model -> Maybe T.Text
+activeAlias :: Model -> Maybe AliasName
 activeAlias m = case m.mode of
   Editing name _ -> Just name
   _ -> Nothing
@@ -364,13 +356,13 @@ data Action
   = NoOp
   | Init
   | SyncAll
-  | SyncAlias !MisoString
+  | SyncAlias !AliasName
   | SetAliases !AliasMap
-  | UpdateAlias !MisoString !AliasInfo
-  | OpenAlias !MisoString
-  | SaveAlias !MisoString !Alias
+  | UpdateAlias !AliasName !AliasInfo
+  | OpenAlias !AliasName
+  | SaveAlias !AliasName !Alias
   | StartCreatingAlias
-  | RegisterAlias !MisoString !Alias
+  | RegisterAlias !AliasName !Alias
   | SetNewAliasName !MisoString
   | SetNewAliasUrl !MisoString
   | UpdateEditingUrl !MisoString
