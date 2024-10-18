@@ -27,6 +27,7 @@ jobs:
       env: 
         GLOBAL_CACHE_IMAGE: ghcr.io/${{github.repository}}/build-cache
       run: earthly --max-remote-cache --use-inline-cache --save-inline-cache --strict --push --remote-cache=ghcr.io/${{github.repository}}/build-cache:cache +worker
+    - run: ls -lavR /tmp/earthly
     - name: Create Tarball
       run: tar --directory=_build -cvf worker.tar.xz worker
     - name: Upload Artifact
