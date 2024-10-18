@@ -1,5 +1,6 @@
 VERSION 0.8
 ARG --global GHC_VER=9.10.1
+ARG --global GLOBAL_CACHE_IMAGE=ghcr.io/konn/shortener/build-cache
 FROM --platform=linux/amd64 ghcr.io/konn/ghc-wasm-earthly:${GHC_VER}
 WORKDIR /workdir
 
@@ -95,6 +96,7 @@ worker:
   BUILD +patch-jsffi-for-cf --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm
   COPY (+patch-jsffi-for-cf/dist --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm) ./dist/src
   RUN cd ./dist && npm i
+  BUILD +frontend
   COPY +frontend/dist/* ./dist/assets/admin/
   SAVE ARTIFACT ./dist AS LOCAL _build/worker
   SAVE IMAGE
