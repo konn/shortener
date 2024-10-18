@@ -12,9 +12,6 @@ ENV CABAL=wasm32-wasi-cabal --project-file=cabal-wasm.project \
 --with-hc-pkg=wasm32-wasi-ghc-pkg-${GHC_VER} \
 --with-hsc2hs=wasm32-wasi-hsc2hs-${GHC_VER}
 
-ENV MOUNT_GLOBAL_STORE="type=cache,mode=0777,id=all#ghc-${GHC_VER}#global-store,sharing=shared,target=/root/.ghc-wasm/.cabal/store"
-ENV MOUNT_DIST_NEWSTYLE="type=cache,mode=0777,id=all#ghc${GHC_VER}#dist-newstyle,sharing=shared,target=dist-newstyle"
-
 build-all:
   COPY --keep-ts ./*.project ./
   COPY --keep-ts ./*.freeze ./
@@ -22,15 +19,11 @@ build-all:
   COPY --keep-ts ./shortener-common ./shortener-common
   COPY --keep-ts ./shortener-frontend ./shortener-frontend
   COPY --keep-ts ./shortener-worker ./shortener-worker
-  RUN --mount ${MOUNT_GLOBAL_STORE} \
-      --mount ${MOUNT_DIST_NEWSTYLE} \
-      ${CABAL} update --index-state=2024-10-17T07:25:36Z
-  RUN --mount ${MOUNT_GLOBAL_STORE} \
-      --mount ${MOUNT_DIST_NEWSTYLE} \
-      ${CABAL} build --only-dependencies all
-  RUN --mount ${MOUNT_GLOBAL_STORE} \
-      --mount ${MOUNT_DIST_NEWSTYLE} \
-      ${CABAL} build all
+  CACHE --sharing shared --chmod 0777 --id=all#ghc-${GHC_VER}#global-store --persist /root/.ghc-wasm/.cabal/store
+  CACHE --sharing=shared --chmod=0777 --id=all#ghc${GHC_VER}#dist-newstyle --persist dist-newstyle
+  RUN ${CABAL} update --index-state=2024-10-17T07:25:36Z
+  RUN ${CABAL} build --only-dependencies all
+  RUN ${CABAL} build all
 
 build:
   FROM +build-all
@@ -43,8 +36,8 @@ build:
   LET WASM_LIB=$(wasm32-wasi-ghc --print-libdir)
   LET DEST=dist/${wasm}
   RUN mkdir -p dist
-  RUN --mount ${MOUNT_DIST_NEWSTYLE} cp ${HS_WASM_PATH} ./dist/${wasm}
-  RUN --mount ${MOUNT_DIST_NEWSTYLE} ${WASM_LIB}/post-link.mjs --input ${HS_WASM_PATH} --output ./dist/ghc_wasm_jsffi.js
+  RUN cp ${HS_WASM_PATH} ./dist/${wasm}
+  RUN ${WASM_LIB}/post-link.mjs --input ${HS_WASM_PATH} --output ./dist/ghc_wasm_jsffi.js
   SAVE ARTIFACT dist
 
 optimised-wasm:
