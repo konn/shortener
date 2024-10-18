@@ -7,10 +7,12 @@ compatibility_flags = ["nodejs_compat"]
 assets = { directory = "./assets/", "binding" = "ASSETS" }
 
 kv_namespaces = [
-  { binding = "KV", id = "<KV id>" }
+  { binding = "KV", id = "<KV Aud Tag>" }
 ]
 
 [vars]
-CF_TEAM_NAME = "<Team Name>"
-REDIRECT_URI = "https://redirect.example.com"
-ADMIN_URI = "https://admin-redirect.example.com"
+ROOT_URI = "https://short.example.com"
+# If you want to protect /admin endpoint,
+# Set the foolowing two to non-empty string.
+CF_TEAM_NAME = "<CLOUDFLARE TEAM NAME>"
+CF_AUD_TAG = "<CLOUDFLARE AUDIENCE TAG>"
