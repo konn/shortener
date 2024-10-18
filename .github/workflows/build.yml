@@ -17,6 +17,12 @@ jobs:
       with:
         version: "latest"
         github-token: ${{ github.token }}
+    - name: Login to ghcr.io
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ github.token }}
     - name: Build Worker
       run: earthly --ci --push --remote-cache=ghcr.io/konn/shortener/build-cache:cache +worker
     - name: Create Tarball
