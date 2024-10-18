@@ -24,7 +24,7 @@ jobs:
         username: ${{ github.repository_owner }}
         password: ${{ github.token }}
     - name: Build Worker
-      run: earthly --save-inline-cache --strict --push --remote-cache=ghcr.io/konn/shortener/build-cache:cache +worker
+      run: earthly --max-remote-cache --save-inline-cache --strict --push --remote-cache=ghcr.io/konn/shortener/build-cache:cache +worker
     - name: Create Tarball
       run: tar --directory=_build -cvf worker.tar.xz worker
     - name: Upload Artifact
