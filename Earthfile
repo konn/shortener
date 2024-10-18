@@ -103,4 +103,4 @@ worker:
   BUILD  --platform=linux/amd64 +frontend
   COPY +frontend/dist/* ./dist/assets/admin/
   SAVE ARTIFACT ./dist AS LOCAL _build/worker
-  SAVE IMAGE --cache-from "${GLOBAL_CACHE_IMAGE}:cache" --push "${GLOBAL_CACHE_IMAGE}:build"
+  SAVE IMAGE --cache-from "${GLOBAL_CACHE_IMAGE}:cache"
