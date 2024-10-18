@@ -28,6 +28,7 @@ build-all:
 
 build:
   FROM +build-all
+  BUILD +build-all
   ARG target
   ARG outdir=$(echo ${target} | cut -d: -f3)
   ARG wasm=${outdir}.wasm
@@ -45,6 +46,7 @@ optimised-wasm:
   ARG outdir=$(echo ${target} | cut -d: -f3)
   ARG wasm=${outdir}.wasm
   RUN mkdir -p dist/
+  BUILD +build --target=${target} --outdir=${outdir} --wasm=${wasm}.orig
   COPY (+build/dist/${wasm}.orig --target=${target} --outdir=${outdir} --wasm=${wasm}.orig) ./dist/
   RUN wizer --allow-wasi --wasm-bulk-memory true --init-func _initialize -o dist/${wasm} dist/${wasm}.orig
   RUN wasm-opt -Oz dist/${wasm} -o dist/${wasm}
@@ -57,6 +59,7 @@ patch-jsffi-for-cf:
   ARG target
   ARG outdir=$(echo ${target} | cut -d: -f3)
   ARG wasm=${outdir}.wasm
+  BUILD +optimised-wasm --target=${target} --outdir=${outdir} --wasm=${wasm}
   COPY  (+optimised-wasm/dist --target=${target} --outdir=${outdir} --wasm=${wasm}) ./dist
   LET PATCHER=./js-ffi-patcher.mjs
   COPY ./build-scripts/jsffi-patcher.mjs ${PATCHER}
@@ -64,6 +67,7 @@ patch-jsffi-for-cf:
   SAVE ARTIFACT ./dist
 
 frontend:
+  BUILD +optimised-wasm --target=shortener-frontend:exe:shortener-frontend
   COPY (+optimised-wasm/dist --target=shortener-frontend:exe:shortener-frontend) ./dist
   LET ORIG_WASM=shortener-frontend.wasm
   LET SHASUM_WASM=$(sha1sum dist/${ORIG_WASM} | cut -c1-7)
@@ -88,7 +92,9 @@ frontend:
 
 worker:
   COPY shortener-worker/data/worker-template/ ./dist/
+  BUILD +patch-jsffi-for-cf --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm
   COPY (+patch-jsffi-for-cf/dist --target=shortener-worker:exe:shortener-worker --wasm=worker.wasm) ./dist/src
   RUN cd ./dist && npm i
   COPY +frontend/dist/* ./dist/assets/admin/
   SAVE ARTIFACT ./dist AS LOCAL _build/worker
+  SAVE IMAGE
