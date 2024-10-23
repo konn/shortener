@@ -4,8 +4,10 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
@@ -22,8 +24,10 @@ module Web.URL.Shortener.API (
   fromAliasName,
 ) where
 
-import Control.Monad (unless, when)
+import Control.Lens
+import Control.Monad (unless, when, (<=<))
 import Data.Aeson
+import Data.Aeson qualified as J
 import Data.Aeson.Types (toJSONKeyText)
 import Data.Bifunctor qualified as Bi
 import Data.ByteString qualified as BS
@@ -31,8 +35,10 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
 import Data.Char qualified as C
+import Data.Generics.Labels ()
 import Data.List.NonEmpty qualified as NE
 import Data.Map (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Generics
 import Lucid (renderBS, toHtml)
@@ -40,7 +46,7 @@ import Lucid.Base (ToHtml)
 import Network.HTTP.Media qualified as M
 import Servant.API
 import Servant.Auth
-import Servant.Auth.JWT (FromJWT, ToJWT)
+import Servant.Auth.JWT
 
 newtype Alias = Alias {dest :: URI}
   deriving (Show, Eq, Ord, Generic)
@@ -95,7 +101,25 @@ data AdminAPI mode = AdminAPI
 data ShortenerUser = ShortenerUser {email :: T.Text}
   deriving (Show, Eq, Ord, Generic)
   deriving anyclass (FromJSON, ToJSON)
-  deriving anyclass (FromJWT, ToJWT)
+
+instance ToJWT ShortenerUser where
+  encodeJWT ShortenerUser {..} =
+    mempty @ClaimsSet
+      & #unregisteredClaims .~ Map.singleton "email" (toJSON email)
+  {-# INLINE encodeJWT #-}
+
+instance FromJWT ShortenerUser where
+  decodeJWT =
+    eitherResult
+      . J.fromJSON
+      <=< maybe (Left "Missing 'email' claim") Right
+        . Map.lookup "email"
+        . (.unregisteredClaims)
+  {-# INLINE decodeJWT #-}
+
+eitherResult :: Result a -> Either T.Text a
+eitherResult (J.Success a) = Right a
+eitherResult (J.Error e) = Left $ T.pack e
 
 newtype AliasName = AliasName {rawAliasName :: CI T.Text}
   deriving (Eq, Ord, Generic)
