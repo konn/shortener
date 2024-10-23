@@ -3,8 +3,8 @@ import: cabal-common.project
 packages: shortener-frontend/*.cabal, shortener-worker/*.cabal, shortener-common/*.cabal
 optimization: False
 active-repositories: hackage.haskell.org
-jobs: $ncpus
 semaphore: True
+jobs: $ncpus
 
 source-repository-package
   type: git
