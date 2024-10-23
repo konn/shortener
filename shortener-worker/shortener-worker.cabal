@@ -62,16 +62,20 @@ library
     effectful,
     generic-lens,
     ghc-wasm-compat,
+    ghc-wasm-jsobjects,
     http-types,
     lens,
     network-uri,
     safe-exceptions,
     servant,
     servant-auth-cloudflare-workers,
+    servant-auth-lite,
     servant-cloudflare-workers,
     servant-cloudflare-workers-effectful,
     shortener-common,
     text,
+    wasm-linear-base,
+    web-sys-hs,
 
 executable shortener-worker
   import: defaults

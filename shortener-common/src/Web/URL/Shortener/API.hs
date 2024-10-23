@@ -13,6 +13,7 @@
 
 module Web.URL.Shortener.API (
   RootAPI (..),
+  rootApiLinks,
   Alias (..),
   AliasInfo (..),
   AdminApp (..),
@@ -25,7 +26,7 @@ module Web.URL.Shortener.API (
 ) where
 
 import Control.Lens
-import Control.Monad (unless, when, (<=<))
+import Control.Monad (unless, when)
 import Data.Aeson
 import Data.Aeson qualified as J
 import Data.Aeson.Types (toJSONKeyText)
@@ -47,6 +48,7 @@ import Network.HTTP.Media qualified as M
 import Servant.API
 import Servant.Auth
 import Servant.Auth.JWT
+import Servant.Links
 
 newtype Alias = Alias {dest :: URI}
   deriving (Show, Eq, Ord, Generic)
@@ -76,6 +78,9 @@ instance MimeUnrender HTML LBS.ByteString where
 instance MimeUnrender HTML BS.ByteString where
   mimeUnrender _ = Right . LBS.toStrict
 
+rootApiLinks :: RootAPI (AsLink Link)
+rootApiLinks = allFieldLinks
+
 data RootAPI mode = RootAPI
   { adminApi :: mode :- "admin" :> "api" :> RequireUser :> NamedRoutes AdminAPI
   , adminApp :: mode :- "admin" :> RequireUser :> NamedRoutes AdminApp
@@ -84,7 +89,7 @@ data RootAPI mode = RootAPI
   deriving (Generic)
 
 data AdminApp mode = AdminApp
-  { editAlias :: mode :- "alias" :> Capture "alias" AliasName :> Raw
+  { editAlias :: mode :- "edit" :> Capture "alias" AliasName :> Raw
   , newAlias :: mode :- "new" :> Raw
   , resources :: mode :- Raw
   }
@@ -109,12 +114,12 @@ instance ToJWT ShortenerUser where
   {-# INLINE encodeJWT #-}
 
 instance FromJWT ShortenerUser where
-  decodeJWT =
-    eitherResult
-      . J.fromJSON
-      <=< maybe (Left "Missing 'email' claim") Right
-        . Map.lookup "email"
-        . (.unregisteredClaims)
+  decodeJWT claims =
+    fmap ShortenerUser . eitherResult . J.fromJSON
+      =<< maybe
+        (Left $ "Missing 'email' claim")
+        Right
+        (Map.lookup "email" claims.unregisteredClaims)
   {-# INLINE decodeJWT #-}
 
 eitherResult :: Result a -> Either T.Text a

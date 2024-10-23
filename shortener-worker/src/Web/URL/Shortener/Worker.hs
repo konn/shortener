@@ -27,11 +27,13 @@ import Data.Function ((&))
 import Data.Generics.Labels ()
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, isJust, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
+import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful hiding (inject, (:>))
+import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Reader.Static (Reader, asks, runReader)
 import Effectful.Servant.Cloudflare.Workers
 import Effectful.Servant.Cloudflare.Workers.Assets
@@ -39,21 +41,26 @@ import Effectful.Servant.Cloudflare.Workers.Cache (CacheOptions (..), serveCache
 import Effectful.Servant.Cloudflare.Workers.KV (KVClass)
 import Effectful.Servant.Cloudflare.Workers.KV qualified as KV
 import GHC.Generics (Generic)
+import GHC.Wasm.Object.Builtins
 import Network.Cloudflare.Worker.Binding (BindingsClass)
 import Network.Cloudflare.Worker.Binding qualified as B
+import Network.Cloudflare.Worker.Binding.Assets qualified as RawAssets
 import Network.Cloudflare.Worker.Handler (JSHandlers)
 import Network.Cloudflare.Worker.Request qualified as Req
 import Network.HTTP.Types (encodePathSegments)
 import Network.HTTP.Types.URI (decodePathSegments)
-import Network.URI (URI)
+import Network.URI (URI, parseURI, uriPath)
 import Network.URI qualified as URI
 import Network.URI.Lens (uriPathLens)
-import Servant.API (Header, Headers, Raw)
+import Servant.API (Header, Headers, Raw, toUrlPiece)
 import Servant.API.ResponseHeaders (addHeader)
+import Servant.Auth ()
 import Servant.Auth.Cloudflare.Workers
 import Servant.Cloudflare.Workers (Tagged (..), WorkerT)
 import Servant.Cloudflare.Workers.Internal.Response (toWorkerResponse)
+import Servant.Cloudflare.Workers.Internal.RouteResult (RouteResult (..))
 import Servant.Cloudflare.Workers.Internal.ServerError (responseServerError)
+import Servant.Cloudflare.Workers.Prelude (RawM)
 import Web.URL.Shortener.API
 
 handlers :: IO JSHandlers
@@ -110,6 +117,18 @@ workers ::
   RootAPI (AsWorkerT Env (Eff es))
 workers = RootAPI {adminApi, redirect, adminApp}
 
+guardIfNonEmptyM ::
+  AuthResult ShortenerUser ->
+  WorkerT Env RawM (Eff es) ->
+  WorkerT Env RawM (Eff es)
+guardIfNonEmptyM auth act = \req env ctx respond -> do
+  let audience = B.getSecret "CF_AUD_TAG" env
+  if T.null audience
+    then act req env ctx respond
+    else case auth of
+      Authenticated ShortenerUser {} -> act req env ctx respond
+      _ -> unsafeEff_ $ respond $ FailFatal err403 {errBody = "Unauthorised"}
+
 guardIfNonEmpty ::
   AuthResult ShortenerUser ->
   WorkerT Env Raw (Eff es) ->
@@ -128,8 +147,8 @@ adminApp ::
   AdminApp (AsWorkerT Env (Eff es))
 adminApp auth =
   AdminApp
-    { editAlias = const $ guardIfNonEmpty auth $ serveCachedRaw defaultCacheOpts serveIndexAsset
-    , newAlias = guardIfNonEmpty auth $ serveCachedRaw defaultCacheOpts serveIndexAsset
+    { editAlias = const $ guardIfNonEmpty auth $ serveIndexAsset
+    , newAlias = guardIfNonEmpty auth serveIndexAsset
     , resources = guardIfNonEmpty auth $ serveCachedRaw defaultCacheOpts $ serveAssets "ASSETS"
     }
 
@@ -142,8 +161,16 @@ defaultCacheOpts =
     }
 
 serveIndexAsset :: WorkerT Env Raw (Eff es)
-serveIndexAsset = serveAssets' "ASSETS" \_ ->
-  Req.newRequest (Just "/assets/index.html") Nothing
+serveIndexAsset = Tagged \req be _ -> do
+  let link = "/" <> toUrlPiece rootApiLinks.adminApp.resources <> "/index.html"
+  consoleLog "Generated Link."
+  let rawUrl = Req.getUrl req.rawRequest
+  consoleLog $ fromText $ "Raw URL: " <> rawUrl
+  let !url = fromString @USVString $ show $ (fromMaybe (error $ "Invalid Url: " <> show rawUrl) $ parseURI $ T.unpack rawUrl) {uriPath = T.unpack link}
+  consoleLog "Generated URL."
+  resp <- await =<< RawAssets.fetch (B.getBinding "ASSETS" be) (inject url)
+  consoleLog "ASSETS attained"
+  pure resp
 
 redirect ::
   (HasUniqueWorkerWith Env es) =>
@@ -281,3 +308,6 @@ putAlias alias Alias {..} = do
     (show dest)
   aliasUrl <- aliasUrlFor alias
   pure AliasInfo {..}
+
+foreign import javascript unsafe "console.log($1)"
+  consoleLog :: USVString -> IO ()
