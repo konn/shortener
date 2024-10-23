@@ -88,6 +88,7 @@ executable shortener-worker
   -- cabal-gild: discover app --exclude=app/Main.hs
   other-modules:
   build-depends: shortener-worker
+  ghc-options: -O2
 
   if os(wasi)
     ghc-options:

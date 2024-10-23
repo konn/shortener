@@ -15,7 +15,7 @@ module Web.URL.Shortener.Worker (handlers, JSHandlers, JSObject (..)) where
 
 import Control.Exception.Safe (throwString)
 import Control.Lens ((%~))
-import Control.Monad (forM, join, when)
+import Control.Monad (forM, guard, join, when)
 import Data.Aeson qualified as A
 import Data.Aeson qualified as J
 import Data.ByteString.Builder qualified as BB
@@ -40,6 +40,7 @@ import Effectful.Servant.Cloudflare.Workers.KV (KVClass)
 import Effectful.Servant.Cloudflare.Workers.KV qualified as KV
 import GHC.Generics (Generic)
 import GHC.Stack (HasCallStack)
+import GHC.Wasm.Object.Builtins
 import Lucid qualified as L
 import Network.Cloudflare.Worker.Binding (BindingsClass)
 import Network.Cloudflare.Worker.Binding qualified as B
@@ -63,12 +64,23 @@ handlers = do
   genericCompileWorkerContextWith @Env
     withWorkerEnv
     ( \env _ -> do
-        let audience = B.getSecret "CF_AUD_TAG" env
-        team <- case A.fromJSON $ B.getEnv "CF_TEAM_NAME" env of
+        consoleLog $ "Getting audience..."
+        let audience = do
+              let aud = B.getSecret "CF_AUD_TAG" env
+              guard $ not $ T.null aud
+              pure aud
+        consoleLog $ fromText $ "Audience: " <> T.pack (show audience)
+        team0 <- case A.fromJSON $ B.getEnv "CF_TEAM_NAME" env of
           J.Error e -> throwString $ "Could not parse CF_TEAM_NAME: " <> e
           J.Success x -> pure x
-        sett <- defaultCloudflareZeroTrustSettings audience team
-        let jwt = toJWTSettings sett
+        let team = do
+              guard $ not $ null team0
+              pure team0
+        consoleLog $ fromText $ "Team: " <> T.pack (show team)
+        !sett <- defaultCloudflareZeroTrustSettings audience team
+        consoleLog $ "CFZT Settings done!"
+        let !jwt = toJWTSettings sett
+        consoleLog $ "JWT Settings done!"
         pure $ sett :. jwt :. EmptyContext
     )
     $ workers
@@ -139,6 +151,7 @@ defaultCacheOpts =
 
 serveIndexAsset :: WorkerT Env Raw (Eff es)
 serveIndexAsset = serveAssets' "ASSETS" \_ -> do
+  consoleLog "Serving index.html"
   Req.newRequest (Just "/assets/index.html") Nothing
 
 redirect ::
@@ -275,3 +288,6 @@ putAlias alias Alias {..} = do
     (show dest)
   aliasUrl <- aliasUrlFor alias
   pure AliasInfo {..}
+
+foreign import javascript unsafe "console.log($1)"
+  consoleLog :: USVString -> IO ()
