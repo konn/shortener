@@ -39,7 +39,6 @@ import Effectful.Servant.Cloudflare.Workers.Cache (CacheOptions (..), serveCache
 import Effectful.Servant.Cloudflare.Workers.KV (KVClass)
 import Effectful.Servant.Cloudflare.Workers.KV qualified as KV
 import GHC.Generics (Generic)
-import Lucid qualified as L
 import Network.Cloudflare.Worker.Binding (BindingsClass)
 import Network.Cloudflare.Worker.Binding qualified as B
 import Network.Cloudflare.Worker.Handler (JSHandlers)
@@ -155,12 +154,9 @@ redirect alias = do
     maybe (serverError err404 {errBody = "URL Alias Not Found: " <> LBS.fromStrict (TE.encodeUtf8 $ fromAliasName alias)}) pure
       =<< KV.get "KV" (T.unpack $ fromAliasName alias)
   serveCached defaultCacheOpts
-  pure $ addHeader (T.pack url) $ L.renderBS $ L.doctypehtml_ do
-    L.head_ do
-      L.title_ "Moved"
-      L.meta_ [L.httpEquiv_ "refresh", L.content_ $ "0;" <> T.pack url]
-    L.body_ do
-      L.a_ [L.href_ $ T.pack url] "moved here"
+  pure $
+    addHeader (T.pack url) $
+      "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url=" <> LBS8.pack url <> "\"></head><body><a href=\"" <> LBS8.pack url <> "\">moved here</a></body></html>"
 
 adminApi ::
   (HasUniqueWorkerWith Env es, Reader WorkerEnv ∈ es) =>
