@@ -39,7 +39,6 @@ import Effectful.Servant.Cloudflare.Workers.Cache (CacheOptions (..), serveCache
 import Effectful.Servant.Cloudflare.Workers.KV (KVClass)
 import Effectful.Servant.Cloudflare.Workers.KV qualified as KV
 import GHC.Generics (Generic)
-import GHC.Stack (HasCallStack)
 import Lucid qualified as L
 import Network.Cloudflare.Worker.Binding (BindingsClass)
 import Network.Cloudflare.Worker.Binding qualified as B
@@ -218,7 +217,7 @@ getAlias alias =
     =<< getAliasInfo alias
 
 listAliases ::
-  (HasCallStack, HasUniqueWorkerWith Env es, Reader WorkerEnv ∈ es) =>
+  (HasUniqueWorkerWith Env es, Reader WorkerEnv ∈ es) =>
   Eff es (Map AliasName AliasInfo)
 listAliases = collect =<< go Nothing mempty
   where
@@ -267,7 +266,12 @@ getAliasInfo key = do
 addPathSegments :: [T.Text] -> URI -> URI
 addPathSegments fps =
   uriPathLens
-    %~ LBS.unpack . BB.toLazyByteString . encodePathSegments . (<> fps) . decodePathSegments . BS8.pack
+    %~ LBS.unpack
+      . BB.toLazyByteString
+      . encodePathSegments
+      . (<> fps)
+      . decodePathSegments
+      . BS8.pack
 
 putAlias :: (HasUniqueWorkerWith Env es, Reader WorkerEnv ∈ es) => AliasName -> Alias -> Eff es AliasInfo
 putAlias alias Alias {..} = do
