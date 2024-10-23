@@ -33,7 +33,6 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful hiding (inject, (:>))
-import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Reader.Static (Reader, asks, runReader)
 import Effectful.Servant.Cloudflare.Workers
 import Effectful.Servant.Cloudflare.Workers.Assets
@@ -58,9 +57,7 @@ import Servant.Auth ()
 import Servant.Auth.Cloudflare.Workers
 import Servant.Cloudflare.Workers (Tagged (..), WorkerT)
 import Servant.Cloudflare.Workers.Internal.Response (toWorkerResponse)
-import Servant.Cloudflare.Workers.Internal.RouteResult (RouteResult (..))
 import Servant.Cloudflare.Workers.Internal.ServerError (responseServerError)
-import Servant.Cloudflare.Workers.Prelude (RawM)
 import Web.URL.Shortener.API
 
 handlers :: IO JSHandlers
@@ -117,18 +114,6 @@ workers ::
   RootAPI (AsWorkerT Env (Eff es))
 workers = RootAPI {adminApi, redirect, adminApp}
 
-guardIfNonEmptyM ::
-  AuthResult ShortenerUser ->
-  WorkerT Env RawM (Eff es) ->
-  WorkerT Env RawM (Eff es)
-guardIfNonEmptyM auth act = \req env ctx respond -> do
-  let audience = B.getSecret "CF_AUD_TAG" env
-  if T.null audience
-    then act req env ctx respond
-    else case auth of
-      Authenticated ShortenerUser {} -> act req env ctx respond
-      _ -> unsafeEff_ $ respond $ FailFatal err403 {errBody = "Unauthorised"}
-
 guardIfNonEmpty ::
   AuthResult ShortenerUser ->
   WorkerT Env Raw (Eff es) ->
@@ -163,13 +148,9 @@ defaultCacheOpts =
 serveIndexAsset :: WorkerT Env Raw (Eff es)
 serveIndexAsset = Tagged \req be _ -> do
   let link = "/" <> toUrlPiece rootApiLinks.adminApp.resources <> "/index.html"
-  consoleLog "Generated Link."
-  let rawUrl = Req.getUrl req.rawRequest
-  consoleLog $ fromText $ "Raw URL: " <> rawUrl
-  let !url = fromString @USVString $ show $ (fromMaybe (error $ "Invalid Url: " <> show rawUrl) $ parseURI $ T.unpack rawUrl) {uriPath = T.unpack link}
-  consoleLog "Generated URL."
+      rawUrl = Req.getUrl req.rawRequest
+      !url = fromString @USVString $ show $ (fromMaybe (error $ "Invalid Url: " <> show rawUrl) $ parseURI $ T.unpack rawUrl) {uriPath = T.unpack link}
   resp <- await =<< RawAssets.fetch (B.getBinding "ASSETS" be) (inject url)
-  consoleLog "ASSETS attained"
   pure resp
 
 redirect ::
@@ -308,6 +289,3 @@ putAlias alias Alias {..} = do
     (show dest)
   aliasUrl <- aliasUrlFor alias
   pure AliasInfo {..}
-
-foreign import javascript unsafe "console.log($1)"
-  consoleLog :: USVString -> IO ()
