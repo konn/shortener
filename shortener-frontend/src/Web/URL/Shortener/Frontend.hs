@@ -29,8 +29,9 @@ import Miso
 import Miso.String (MisoString, ToMisoString (toMisoString))
 import Network.HTTP.Types.URI (decodePathSegments)
 import Network.URI (URIAuth (..), parseURI)
-import Steward.Client.Fetch (ClientM, runClient)
-import Steward.Types
+import Servant.Auth.Client
+import Servant.Client.FetchAPI
+import Servant.Client.Generic (genericClient)
 import Web.URL.Shortener.API
 
 defaultMain :: IO ()
@@ -38,12 +39,8 @@ defaultMain = Runner.run defaultApp
 
 defaultApp :: JSM ()
 defaultApp = do
-  uri <-
-    getCurrentURI
-      <&> #uriPath .~ ""
-      <&> #uriQuery .~ ""
-      <&> #uriFragment .~ ""
-  let model = initialModel uri
+  url <- getCurrentURI
+  let model = initialModel url
   startApp App {subs = [], view = viewModel, ..}
   where
     initialAction = Init
@@ -54,27 +51,32 @@ defaultApp = do
     logLevel = Off
 
 initialModel :: URI -> Model
-initialModel rootUri =
+initialModel url =
   Model
     { mode = Idle
     , aliases = mempty
-    , rootUri
+    , rootUri =
+        url & #uriPath .~ "" & #uriQuery .~ "" & #uriFragment .~ ""
+    , url
     }
 
-api :: AdminAPI (Client ClientM)
-api = client
+api :: RootAPI (AsClientT (FetchT JSM))
+api = genericClient
+
+adminApi :: AdminAPI (AsClientT (FetchT JSM))
+adminApi = api.adminApi (CloudflareToken Nothing)
 
 updateModel :: Action -> Model -> Effect Action Model
 updateModel NoOp m = noEff m
 updateModel Init m = m <# pure SyncAll
 updateModel SyncAll m =
   m <# do
-    aliases <- callApi api.listAliases.call
+    aliases <- callApi $ adminApi.listAliases
     pure $ SetAliases aliases
 updateModel (SetAliases aliases) m = noEff m {aliases}
 updateModel (SyncAlias alias) m =
   m <# do
-    aliasInfo <- callApi $ api.getAlias.call alias
+    aliasInfo <- callApi $ adminApi.getAlias alias
     pure $ UpdateAlias alias aliasInfo
 updateModel (UpdateAlias alias aliasInfo) m =
   noEff m {aliases = Map.insert alias aliasInfo $ aliases m}
@@ -83,7 +85,7 @@ updateModel (OpenAlias alias) m =
     #> m {mode = Editing alias (maybe (Left "N/A") (Right . Alias . (.dest)) $ Map.lookup alias $ aliases m)}
 updateModel (SaveAlias name alias') m =
   m <# do
-    ainfo <- callApi $ api.putAlias.call name alias'
+    ainfo <- callApi $ adminApi.putAlias name alias'
     pure $ UpdateAlias name ainfo
 updateModel StartCreatingAlias m = noEff m {mode = CreatingNewAlias "" (Left "")}
 updateModel (SetNewAliasName name) m =
@@ -103,7 +105,7 @@ updateModel (SetNewAliasUrl url) m =
     _ -> noEff m
 updateModel (RegisterAlias name alias) m =
   m
-    `batchEff` [ UpdateAlias name <$> callApi (api.postAlias.call name alias)
+    `batchEff` [ UpdateAlias name <$> callApi (adminApi.postAlias name alias)
                , OpenAlias name <$ liftIO (threadDelay 1000_000)
                ]
 updateModel (UpdateEditingUrl url) m =
@@ -127,15 +129,15 @@ updateModel CopyUrl m =
             pure NoOp
     _ -> noEff m
 
-callApi :: ClientM a -> JSM a
+callApi :: FetchT JSM a -> JSM a
 callApi act = do
   uri <-
     getCurrentURI
       <&> #uriPath .~ ""
       <&> #uriQuery .~ ""
       <&> #uriFragment .~ ""
-  consoleLog $ "Running: " <> fromString (show uri)
-  runClient (show uri) act
+  baseUrl <- parseBaseUrl $ show uri
+  runFetch baseUrl act
 
 viewModel :: Model -> View Action
 viewModel m@Model {..} =
@@ -359,6 +361,7 @@ data Model = Model
   { mode :: !Mode
   , aliases :: !AliasMap
   , rootUri :: !URI
+  , url :: !URI
   }
   deriving (Show, Eq, Ord, Generic)
 
