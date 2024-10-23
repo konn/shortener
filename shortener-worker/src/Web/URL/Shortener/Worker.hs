@@ -106,25 +106,28 @@ workers ::
   RootAPI (AsWorkerT Env (Eff es))
 workers = RootAPI {adminApi, redirect, adminApp}
 
+guardIfNonEmpty ::
+  AuthResult ShortenerUser ->
+  WorkerT Env Raw (Eff es) ->
+  WorkerT Env Raw (Eff es)
+guardIfNonEmpty auth (Tagged act) = Tagged \req env ctx -> do
+  let audience = B.getSecret "CF_AUD_TAG" env
+  if T.null audience
+    then act req env ctx
+    else case auth of
+      Authenticated ShortenerUser {} -> act req env ctx
+      _ -> toWorkerResponse $ responseServerError err403 {errBody = "Unauthorised"}
+
 adminApp ::
   forall es.
   AuthResult ShortenerUser ->
   AdminApp (AsWorkerT Env (Eff es))
-adminApp (Authenticated ShortenerUser {}) =
+adminApp auth =
   AdminApp
-    { editAlias = const $ serveCachedRaw defaultCacheOpts serveIndexAsset
-    , newAlias = serveCachedRaw defaultCacheOpts serveIndexAsset
-    , resources = serveCachedRaw defaultCacheOpts $ serveAssets "ASSETS"
+    { editAlias = const $ guardIfNonEmpty auth $ serveCachedRaw defaultCacheOpts serveIndexAsset
+    , newAlias = guardIfNonEmpty auth $ serveCachedRaw defaultCacheOpts serveIndexAsset
+    , resources = guardIfNonEmpty auth $ serveCachedRaw defaultCacheOpts $ serveAssets "ASSETS"
     }
-adminApp _ =
-  AdminApp
-    { editAlias = \_ -> unauthorised
-    , newAlias = unauthorised
-    , resources = unauthorised
-    }
-  where
-    unauthorised = Tagged $ \_ _ _ ->
-      toWorkerResponse $ responseServerError err403 {errBody = "Unauthorised"}
 
 defaultCacheOpts :: CacheOptions
 defaultCacheOpts =
@@ -158,15 +161,21 @@ adminApi ::
   (HasUniqueWorkerWith Env es, Reader WorkerEnv ∈ es) =>
   AuthResult ShortenerUser ->
   AdminAPI (AsWorkerT e (Eff es))
-adminApi (Authenticated ShortenerUser {}) = AdminAPI {listAliases, getAlias, postAlias, putAlias}
-adminApi _ =
+adminApi auth =
   AdminAPI
-    { putAlias = \_ _ -> unauthorised
-    , postAlias = \_ _ -> unauthorised
-    , listAliases = unauthorised
-    , getAlias = \_ -> unauthorised
+    { listAliases = guardAuth listAliases
+    , getAlias = guardAuth . getAlias
+    , postAlias = fmap guardAuth . postAlias
+    , putAlias = fmap guardAuth . putAlias
     }
   where
+    guardAuth act = do
+      sec <- getSecret "CF_AUD_TAG"
+      if T.null sec
+        then act
+        else case auth of
+          Authenticated ShortenerUser {} -> act
+          _ -> unauthorised
     unauthorised = serverError err403 {errBody = "Unauthorised"}
 
 postAlias ::

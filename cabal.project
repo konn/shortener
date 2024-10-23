@@ -1,3 +1,3 @@
 packages: */*.cabal
-multi-repl: True
 import: cabal-common.project
+multi-repl: True
