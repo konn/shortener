@@ -18,5 +18,6 @@
   },
   "files.exclude": {
     "dist-newstyle": true
-  }
+  },
+  "haskell.sessionLoading": "multipleComponents"
 }

@@ -1,6 +1,6 @@
 constraints:
   miso -ios -jsaddle -jsstring-only -tests,
-  any.servant ==0.20.1,
+  any.servant ==0.20.2,
   any.servant-lucid ==0.9.0.6
 
 allow-newer:
@@ -38,17 +38,25 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/konn/ghc-wasm-earthly
-  tag: 4fbfb5eb10afb9e267c2dc30f19fe4871338888e
+  tag: b44237abb9c2291ae9b20adbf50f8f43efc76cd6
   subdir:
     cloudflare-worker
     ghc-wasm-jsobjects
     ghc-wasm-compat
     wasm-linear-base
     web-sys-hs
-    steward-core
-    steward-client
-    steward-workers
-    steward-fetch
+
+source-repository-package
+  type: git
+  location: https://github.com/konn/servant-cloudflare-workers
+  tag: c512fe3713eee78bd3a8a04c412c3776b9f701b1
+  subdir:
+    servant-cloudflare-workers
+    servant-cloudflare-workers-effectful
+    servant-client-fetch
+    servant-auth/servant-auth-lite
+    servant-auth/servant-auth-cloudflare-workers
+    servant-auth/servant-auth-lite-client
 
 source-repository-package
   type: git

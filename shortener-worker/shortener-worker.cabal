@@ -66,12 +66,14 @@ library
     http-types,
     lens,
     network-uri,
-    random-effectful,
     safe-exceptions,
+    servant,
+    servant-auth-cloudflare-workers,
+    servant-auth-lite,
+    servant-cloudflare-workers,
+    servant-cloudflare-workers-effectful,
     shortener-common,
-    steward-workers,
     text,
-    time-effectful,
     wasm-linear-base,
     web-sys-hs,
 
@@ -82,6 +84,7 @@ executable shortener-worker
   -- cabal-gild: discover app --exclude=app/Main.hs
   other-modules:
   build-depends: shortener-worker
+  ghc-options: -O2
 
   if os(wasi)
     ghc-options:

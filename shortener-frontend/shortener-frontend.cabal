@@ -66,7 +66,6 @@ library
   -- cabal-gild: discover src --include=src/**/Internal.hs --include=src/**/Internal/**/*.hs
   other-modules:
   build-depends:
-    aeson,
     bytestring,
     containers,
     generic-lens,
@@ -75,12 +74,12 @@ library
     lens,
     miso,
     network-uri,
+    servant-auth-lite-client,
+    servant-client-core,
+    servant-client-fetch,
     shortener-common,
     shortener-frontend:internal,
-    steward-core,
-    steward-fetch,
     text,
-    unordered-containers,
 
 executable shortener-frontend
   import: defaults
