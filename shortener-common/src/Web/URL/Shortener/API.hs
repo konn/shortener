@@ -90,7 +90,7 @@ data RootAPI mode = RootAPI
 
 data AdminApp mode = AdminApp
   { editAlias :: mode :- "edit" :> Capture "alias" AliasName :> Raw
-  , newAlias :: mode :- "new" :> Raw
+  , newAlias :: mode :- "new" :> QueryParam "name" AliasName :> Raw
   , resources :: mode :- Raw
   }
   deriving (Generic)

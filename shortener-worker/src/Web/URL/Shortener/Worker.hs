@@ -133,7 +133,7 @@ adminApp ::
 adminApp auth =
   AdminApp
     { editAlias = const $ guardIfNonEmpty auth $ serveIndexAsset
-    , newAlias = guardIfNonEmpty auth serveIndexAsset
+    , newAlias = const $ guardIfNonEmpty auth serveIndexAsset
     , resources = guardIfNonEmpty auth $ serveCachedRaw defaultCacheOpts $ serveAssets "ASSETS"
     }
 

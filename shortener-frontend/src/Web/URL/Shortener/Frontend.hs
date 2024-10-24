@@ -1,13 +1,18 @@
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Web.URL.Shortener.Frontend (defaultMain, defaultApp) where
 
 import Control.Concurrent (threadDelay)
+import Control.Exception.Safe (SomeException, tryAny, tryAsync)
 import Control.Lens
 import Control.Monad (guard)
 import Control.Monad.IO.Class (liftIO)
@@ -16,22 +21,26 @@ import Data.ByteString.Char8 qualified as BS8
 import Data.Either (isRight)
 import Data.Functor (void)
 import Data.Generics.Labels ()
+import Data.Kind (Type)
 import Data.List qualified as L
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust, isJust)
+import Data.Proxy (Proxy (..))
 import Data.String (IsString (..))
 import Data.Text qualified as T
-import GHC.Generics (Generic)
 import Language.Javascript.JSaddle qualified as JSM
 import Language.Javascript.JSaddle.Runner qualified as Runner
 import Miso
 import Miso.String (MisoString, ToMisoString (toMisoString))
 import Network.HTTP.Types.URI (decodePathSegments)
 import Network.URI (URIAuth (..), parseURI)
+import Servant.API
+import Servant.API.Generic
 import Servant.Auth.Client
 import Servant.Client.FetchAPI
 import Servant.Client.Generic (genericClient)
+import Servant.Links (linkURI)
 import Web.URL.Shortener.API
 
 defaultMain :: IO ()
@@ -41,7 +50,14 @@ defaultApp :: JSM ()
 defaultApp = do
   url <- getCurrentURI
   let model = initialModel url
-  startApp App {subs = [], view = viewModel, ..}
+  startApp
+    App
+      { subs =
+          [ uriSub parseURIAction
+          ]
+      , view = viewModel
+      , ..
+      }
   where
     initialAction = Init
     update = updateModel
@@ -50,6 +66,9 @@ defaultApp = do
     mountPoint = Nothing
     logLevel = Off
 
+parseURIAction :: URI -> Action
+parseURIAction = ChangeWindowUrl
+
 initialModel :: URI -> Model
 initialModel url =
   Model
@@ -57,7 +76,6 @@ initialModel url =
     , aliases = mempty
     , rootUri =
         url & #uriPath .~ "" & #uriQuery .~ "" & #uriFragment .~ ""
-    , url
     }
 
 api :: RootAPI (AsClientT (FetchT JSM))
@@ -66,9 +84,21 @@ api = genericClient
 adminApi :: AdminAPI (AsClientT (FetchT JSM))
 adminApi = api.adminApi (CloudflareToken Nothing)
 
+updateUrl :: URI -> Model -> Effect Action Model
+updateUrl uri m = do
+  Effect () [const $ pushURI uri]
+  either
+    (const notFound)
+    id
+    (route (Proxy @("admin" :> ToServantApi AdminApp)) routeUpdater uri)
+    m
+
 updateModel :: Action -> Model -> Effect Action Model
 updateModel NoOp m = noEff m
-updateModel Init m = m <# pure SyncAll
+updateModel (ChangeWindowUrl uri) m = updateUrl uri m
+updateModel Init m =
+  m <# do
+    parseURIAction <$> getCurrentURI
 updateModel SyncAll m =
   m <# do
     aliases <- callApi $ adminApi.listAliases
@@ -76,18 +106,16 @@ updateModel SyncAll m =
 updateModel (SetAliases aliases) m = noEff m {aliases}
 updateModel (SyncAlias alias) m =
   m <# do
-    aliasInfo <- callApi $ adminApi.getAlias alias
-    pure $ UpdateAlias alias aliasInfo
+    eith <- tryAsync @_ @SomeException $ callApi $ adminApi.getAlias alias
+    case eith of
+      Right aliasInfo -> pure $ UpdateAlias alias aliasInfo
+      Left exc -> NoOp <$ consoleLog ("Exception: " <> toMisoString (show exc))
 updateModel (UpdateAlias alias aliasInfo) m =
   noEff m {aliases = Map.insert alias aliasInfo $ aliases m}
-updateModel (OpenAlias alias) m =
-  pure (SyncAlias alias)
-    #> m {mode = Editing alias (maybe (Left "N/A") (Right . Alias . (.dest)) $ Map.lookup alias $ aliases m)}
 updateModel (SaveAlias name alias') m =
   m <# do
     ainfo <- callApi $ adminApi.putAlias name alias'
     pure $ UpdateAlias name ainfo
-updateModel StartCreatingAlias m = noEff m {mode = CreatingNewAlias "" (Left "")}
 updateModel (SetNewAliasName name) m =
   case m.mode of
     CreatingNewAlias _ ainfo -> noEff m {mode = CreatingNewAlias name ainfo}
@@ -106,7 +134,7 @@ updateModel (SetNewAliasUrl url) m =
 updateModel (RegisterAlias name alias) m =
   m
     `batchEff` [ UpdateAlias name <$> callApi (adminApi.postAlias name alias)
-               , OpenAlias name <$ liftIO (threadDelay 1000_000)
+               , openAlias name <$ liftIO (threadDelay 1000_000)
                ]
 updateModel (UpdateEditingUrl url) m =
   case m.mode of
@@ -129,6 +157,9 @@ updateModel CopyUrl m =
             pure NoOp
     _ -> noEff m
 
+openAlias :: AliasName -> Action
+openAlias = ChangeWindowUrl . linkURI . rootApiLinks.adminApp.editAlias
+
 callApi :: FetchT JSM a -> JSM a
 callApi act = do
   uri <-
@@ -139,6 +170,34 @@ callApi act = do
   baseUrl <- parseBaseUrl $ show uri
   runFetch baseUrl act
 
+type AsRoute :: Type -> Type
+data AsRoute a
+
+instance GenericMode (AsRoute a) where
+  type AsRoute a :- xs = RouteT xs a
+
+routeUpdater :: RouteT ("admin" :> ToServantApi AdminApp) (Model -> Effect Action Model)
+routeUpdater = toServant routes
+  where
+    routes :: AdminApp (AsRoute (Model -> Effect Action Model))
+    routes =
+      AdminApp
+        { newAlias = \name m ->
+            m {mode = CreatingNewAlias (maybe "" fromAliasName name) (Left "")} <# pure NoOp
+        , editAlias = \alias m ->
+            let m' = m {mode = Editing alias (maybe (Left "N/A") (Right . Alias . (.dest)) $ Map.lookup alias m.aliases)}
+             in m' <# pure (SyncAlias alias)
+        , resources = \m -> noEff m {mode = Idle}
+        }
+
+setIdle :: Action
+setIdle = ChangeWindowUrl $ linkURI rootApiLinks.adminApp.resources
+
+notFound :: Model -> Effect Action Model
+notFound m =
+  m <# do
+    pure $ ChangeWindowUrl $ linkURI rootApiLinks.adminApp.resources
+
 viewModel :: Model -> View Action
 viewModel m@Model {..} =
   section_
@@ -147,7 +206,7 @@ viewModel m@Model {..} =
         [class_ "hero"]
         [ div_
             [class_ "hero-body"]
-            [ div_ [class_ "title"] ["URL Shortener"]
+            [ div_ [class_ "title"] [a_ [onClick setIdle] ["URL Shortener"]]
             , div_ [class_ "subtitle"] ["Admin Panel"]
             ]
         ]
@@ -166,7 +225,7 @@ viewModel m@Model {..} =
                             [class_ "level-right"]
                             [ div_
                                 [class_ "level-item"]
-                                [ a_ [onClick StartCreatingAlias, class_ "button is-small is-primary"] [mdiDark "add"]
+                                [ a_ [onClick $ startCreatingAlias Nothing, class_ "button is-small is-primary"] [mdiDark "add"]
                                 ]
                             ]
                         ]
@@ -178,7 +237,7 @@ viewModel m@Model {..} =
                     , let attrs =
                             if Just name == activeAlias m
                               then [class_ "is-active"]
-                              else [onClick $ OpenAlias name]
+                              else [onClick $ openAlias name]
                     ]
                 ]
             ]
@@ -188,17 +247,41 @@ viewModel m@Model {..} =
         ]
     ]
 
+startCreatingAlias :: Maybe AliasName -> Action
+startCreatingAlias = ChangeWindowUrl . linkURI . rootApiLinks.adminApp.newAlias
+
 renderMain :: Model -> [View Action]
 renderMain m@Model {..} =
   case mode of
     Idle -> [h2_ [] ["Select an alias or create New"]]
     Editing name eith ->
       case Map.lookup name aliases of
-        Nothing -> [h2_ [] ["Alias not found"]]
+        Nothing ->
+          [ h2_ [] ["Alias not found"]
+          , div_
+              [class_ "field is-grouped"]
+              [ div_
+                  [class_ "control"]
+                  [ button_
+                      [ class_ "button is-link"
+                      , onClick $ startCreatingAlias $ Just name
+                      ]
+                      ["Create"]
+                  ]
+              , div_
+                  [class_ "control"]
+                  [ button_
+                      [ class_ "button is-link is-light"
+                      , onClick setIdle
+                      ]
+                      ["Cancel"]
+                  ]
+              ]
+          ]
         Just aliasInfo -> renderAlias name aliasInfo eith
     CreatingNewAlias name malias ->
       let aliasName = parseAliasName name
-          isOkName = isRight aliasName
+          isOkName = isRight aliasName && either (const False) (not . flip Map.member m.aliases) aliasName
           dest = either id (T.pack . show . (.dest)) malias
           aliasClass = fromString $ unwords $ "input" : ["is-danger" | not isOkName]
           muri = parseAbsUrl m dest
@@ -361,7 +444,6 @@ data Model = Model
   { mode :: !Mode
   , aliases :: !AliasMap
   , rootUri :: !URI
-  , url :: !URI
   }
   deriving (Show, Eq, Ord, Generic)
 
@@ -377,12 +459,11 @@ data Action
   | SyncAlias !AliasName
   | SetAliases !AliasMap
   | UpdateAlias !AliasName !AliasInfo
-  | OpenAlias !AliasName
   | SaveAlias !AliasName !Alias
-  | StartCreatingAlias
   | RegisterAlias !AliasName !Alias
   | SetNewAliasName !MisoString
   | SetNewAliasUrl !MisoString
   | UpdateEditingUrl !MisoString
   | CopyUrl
+  | ChangeWindowUrl !URI
   deriving (Show, Eq, Ord, Generic)
