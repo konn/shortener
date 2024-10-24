@@ -12,7 +12,7 @@
 module Web.URL.Shortener.Frontend (defaultMain, defaultApp) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception.Safe (SomeException, tryAny, tryAsync)
+import Control.Exception.Safe (tryAny)
 import Control.Lens
 import Control.Monad (guard)
 import Control.Monad.IO.Class (liftIO)
@@ -52,22 +52,17 @@ defaultApp = do
   let model = initialModel url
   startApp
     App
-      { subs =
-          [ uriSub parseURIAction
-          ]
+      { subs = [uriSub HandleURI]
       , view = viewModel
+      , initialAction = HandleURI url
       , ..
       }
   where
-    initialAction = Init
     update = updateModel
 
     events = defaultEvents
     mountPoint = Nothing
     logLevel = Off
-
-parseURIAction :: URI -> Action
-parseURIAction = ChangeWindowUrl
 
 initialModel :: URI -> Model
 initialModel url =
@@ -84,9 +79,8 @@ api = genericClient
 adminApi :: AdminAPI (AsClientT (FetchT JSM))
 adminApi = api.adminApi (CloudflareToken Nothing)
 
-updateUrl :: URI -> Model -> Effect Action Model
-updateUrl uri m = do
-  Effect () [const $ pushURI uri]
+handleUrl :: URI -> Model -> Effect Action Model
+handleUrl uri m = do
   either
     (const notFound)
     id
@@ -95,10 +89,11 @@ updateUrl uri m = do
 
 updateModel :: Action -> Model -> Effect Action Model
 updateModel NoOp m = noEff m
-updateModel (ChangeWindowUrl uri) m = updateUrl uri m
-updateModel Init m =
+updateModel (HandleURI uri) m = handleUrl uri m
+updateModel (ChangeWindowUrl uri) m =
   m <# do
-    parseURIAction <$> getCurrentURI
+    pushURI uri
+    pure (HandleURI uri)
 updateModel SyncAll m =
   m <# do
     aliases <- callApi $ adminApi.listAliases
@@ -106,7 +101,7 @@ updateModel SyncAll m =
 updateModel (SetAliases aliases) m = noEff m {aliases}
 updateModel (SyncAlias alias) m =
   m <# do
-    eith <- tryAsync @_ @SomeException $ callApi $ adminApi.getAlias alias
+    eith <- tryAny $ callApi $ adminApi.getAlias alias
     case eith of
       Right aliasInfo -> pure $ UpdateAlias alias aliasInfo
       Left exc -> NoOp <$ consoleLog ("Exception: " <> toMisoString (show exc))
@@ -134,7 +129,7 @@ updateModel (SetNewAliasUrl url) m =
 updateModel (RegisterAlias name alias) m =
   m
     `batchEff` [ UpdateAlias name <$> callApi (adminApi.postAlias name alias)
-               , openAlias name <$ liftIO (threadDelay 1000_000)
+               , openAlias name <$ liftIO (threadDelay 100_000)
                ]
 updateModel (UpdateEditingUrl url) m =
   case m.mode of
@@ -187,7 +182,7 @@ routeUpdater = toServant routes
         , editAlias = \alias m ->
             let m' = m {mode = Editing alias (maybe (Left "N/A") (Right . Alias . (.dest)) $ Map.lookup alias m.aliases)}
              in m' <# pure (SyncAlias alias)
-        , resources = \m -> noEff m {mode = Idle}
+        , resources = \m -> m {mode = Idle} <# pure SyncAll
         }
 
 setIdle :: Action
@@ -454,7 +449,6 @@ activeAlias m = case m.mode of
 
 data Action
   = NoOp
-  | Init
   | SyncAll
   | SyncAlias !AliasName
   | SetAliases !AliasMap
@@ -466,4 +460,5 @@ data Action
   | UpdateEditingUrl !MisoString
   | CopyUrl
   | ChangeWindowUrl !URI
+  | HandleURI !URI
   deriving (Show, Eq, Ord, Generic)
