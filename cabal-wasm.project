@@ -1,7 +1,7 @@
 with-compiler: wasm32-wasi-9.10.1
 import: cabal-common.project
 packages: shortener-frontend/*.cabal, shortener-worker/*.cabal, shortener-common/*.cabal
-optimization: False
+optimization: 2
 active-repositories: hackage.haskell.org
 jobs: $ncpus
 semaphore: True
